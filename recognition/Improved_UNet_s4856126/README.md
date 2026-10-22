@@ -255,6 +255,64 @@ Although the training loss decreased steadily, validation Dice fluctuated throug
 These findings suggest that residual connections did not produce a clear generalisation advantage under the current experimental configuration.
 
 ## 5. Feasibility Review
+# Feasibility Review: Improved 2D U-Net for HipMRI Segmentation
+
+**Course:** COMP3710 Pattern Recognition  
+**Student ID:** s4856126  
+**Difficulty:** Normal  
+**Project:** Medical Image Segmentation using an Improved 2D U-Net
+
+### 1. User Need, Scope and Acceptance Criteria
+
+The intended users are medical imaging specialists involved in prostate radiotherapy planning. Manual delineation of anatomical structures from pelvic MRI is time-consuming, while inaccurate boundaries may affect treatment planning.
+
+The proposed system will investigate an Improved 2D U-Net that generates multiclass anatomical segmentation predictions from MRI slices. It is intended as a research prototype to assist human review, not as an autonomous clinical system.
+
+The acceptance criteria are:
+
+1. Maintain strictly independent patient-level training, validation, and test partitions.
+2. Aim for prostate Dice ≥ 0.75 on the held-out test set, using a verified anatomical label mapping.
+3. Benchmark the Improved U-Net against a Standard U-Net using per-class Dice and IoU.
+4. Measure computational cost, including model parameters, peak GPU memory, and inference time.
+5. Investigate 3–5 representative segmentation failures, particularly around small anatomical structures and uncertain boundaries.
+
+### 2. Model Choice and Course Concepts
+
+The project uses the HipMRI Study dataset available on the UQ Rangpur HPC cluster, specifically the 2D MRI slices and corresponding segmentation masks.
+
+A Standard 2D U-Net will serve as the baseline. The proposed improvement introduces residual convolutional blocks into the U-Net encoder-decoder architecture.
+
+This design applies COMP3710 concepts including convolutional neural networks, feature extraction, skip connections, residual learning, cross-entropy loss, backpropagation, and gradient-based optimization.
+
+The key research question is whether adding residual connections improves segmentation reliability enough to justify the additional computational complexity.
+
+### 3. Preliminary Feasibility Evidence
+
+An initial dataset audit confirmed:
+
+| Partition | MRI Slices | Patients |
+|---|---:|---:|
+| Training | 11,460 | 31 |
+| Validation | 660 | 4 |
+| Test | 540 | 3 |
+
+The patient groups do not overlap, reducing the risk of patient-level data leakage.
+
+The segmentation masks contain six numerical labels (0–5). The preprocessing pipeline standardizes MRI inputs to 256 × 128 pixels and applies intensity normalization while preserving discrete segmentation labels.
+
+Initial data-loading and model smoke tests demonstrated that the dataset and PyTorch training pipeline are technically feasible.
+
+### 4. Risks, Computing Budget and Fallback
+
+The main risks are class imbalance, uncertain anatomical boundaries, limited patient diversity, potential overfitting, and the absence of inter-slice context in a 2D model. The numerical-to-anatomical label mapping also requires verification before prostate-specific conclusions can be made.
+
+Experiments will use the NVIDIA A100 GPUs available through Rangpur, with an initial training configuration of 10 epochs, batch size 8, and a three-hour Slurm allocation per training experiment.
+
+The next planned steps are to train both architectures, compare their validation and independent test performance, profile resource usage, and inspect difficult segmentation cases.
+
+If the Improved U-Net offers insufficient accuracy improvement or introduces excessive computational cost, the Standard U-Net will remain the fallback.
+
+**Expected outcome:** A reproducible baseline comparison and evidence-based recommendation on whether residual connections provide practical value for 2D HipMRI segmentation.
 
 ### 5.1 User Need and Project Scope
 
