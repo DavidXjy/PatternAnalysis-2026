@@ -30,9 +30,9 @@ The 2D dataset is located at:
 
 Each sample consists of an MRI slice and a corresponding segmentation mask stored in NIfTI format (`.nii.gz`).
 
-The segmentation masks contain six numerical labels, from 0 to 5. The original study includes annotations for anatomical structures such as the body outline, bone, bladder, rectum, and prostate, in addition to the background.
+The segmentation masks contain six numerical labels, from 0 to 5. The numerical labels represent the background and annotated anatomical regions; their authoritative numerical-to-anatomical mapping remains unverified in the available local metadata.
 
-Visual inspection and the anatomical class information suggest that raw Label 5 may correspond to the prostate. However, the precise numerical label mapping was not explicitly available in the inspected dataset metadata. Therefore, the results are reported using raw label IDs until an authoritative mapping is established.
+Visual inspection suggests that raw Label 5 may correspond to the prostate, but the numerical-to-anatomical mapping could not be confirmed from the inspected dataset metadata. Results are therefore reported using raw label IDs until an authoritative mapping is established.
 
 ### 2.2 Dataset Splitting
 
@@ -292,7 +292,7 @@ The Standard U-Net successfully completed 10 epochs and achieved a best validati
 
 The Improved U-Net subsequently completed 10 epochs and achieved a best validation foreground macro Dice of 0.9039.
 
-Both models produced valid six-class segmentation outputs during testing.
+Both models passed output-shape and forward/backward smoke tests; baseline inference was also verified using a test image. Full independent test evaluation remains pending.
 
 These results demonstrate that the implementation and training pipeline are operational.
 
@@ -328,6 +328,7 @@ The two models were trained for 10 epochs using the same data partitions and pri
 | Best validation foreground macro Dice | **0.9109** | 0.9039 |
 | Label 5 validation Dice at selected checkpoint | **0.8440** | 0.8365 |
 | Final training loss | 0.0265 | **0.0239** |
+| Trainable parameters | 1,942,374 | 2,030,902 |
 
 The Standard U-Net achieved approximately 0.0070 higher validation foreground macro Dice.
 
@@ -360,7 +361,7 @@ This aggregation method must be distinguished from alternative methods such as a
 | Test Label 5 IoU | TODO | TODO |
 | Mean inference time per image | TODO | TODO |
 | Peak allocated GPU memory | TODO | TODO |
-| Trainable parameters | TODO | TODO |
+| Trainable parameters | 1,942,374 | 2,030,902 |
 
 The test results will be reported only after the corresponding GPU evaluation job has completed successfully.
 
@@ -375,6 +376,10 @@ The comparison will include model parameter count, inference latency, and peak G
 A more complex model should be preferred only if its performance improvements justify the additional resource requirements.
 
 Measurements from `evaluate.py` will provide an initial technical comparison. Inference time measurements should be interpreted with consideration of hardware, batch size, and measurement methodology.
+
+The Standard U-Net contains 1,942,374 trainable parameters, while the Improved U-Net contains 2,030,902 trainable parameters. The residual architecture therefore adds 88,528 parameters, an increase of approximately 4.56% relative to the baseline.
+
+Despite this increase in model size, the Improved U-Net achieved a lower best validation foreground macro Dice (0.9039) than the Standard U-Net (0.9109). Additional parameters did not provide a validation accuracy advantage in this single-run experiment. Final evaluation of computational efficiency awaits comparable GPU memory and inference latency measurements.
 
 ## 7. Qualitative Failure Case Analysis
 
@@ -522,7 +527,7 @@ AI assistance included suggestions for implementing residual blocks, structuring
 
 The suggested code was checked through dataset audits, patient-split verification, tensor shape tests, forward and backward propagation smoke tests, checkpoint inspection, and actual model training experiments on Rangpur.
 
-Both models completed 10-epoch training runs, and saved checkpoints were inspected to confirm successful model selection.
+Both models completed 10-epoch training runs, and the training logs confirmed that best-validation checkpoints were saved.
 
 Final evaluation and visual error analysis are being performed using actual HipMRI data.
 
@@ -563,11 +568,7 @@ This publication is included among the references specified in the HipMRI Study 
 ## 12. References
 
 1. The University of Queensland. *COMP3710/COMP7710 Pattern Recognition: Report Assessment Specification*. 2026.
-
 2. HipMRI Study. *HipMRI Study for MRI-alone Treatment Planning and Other Imaging*. https://doi.org/10.1016/j.ijrobp.2015.08.045
-
 3. Ronneberger, O., Fischer, P., and Brox, T. (2015). *U-Net: Convolutional Networks for Biomedical Image Segmentation*. arXiv:1505.04597. https://arxiv.org/abs/1505.04597
-
 4. He, K., Zhang, X., Ren, S., and Sun, J. (2016). *Deep Residual Learning for Image Recognition*. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. https://arxiv.org/abs/1512.03385
-
 5. HipMRI Study. *Data Use Agreement*. Distributed with the HipMRI Study dataset on the UQ Rangpur HPC cluster.
