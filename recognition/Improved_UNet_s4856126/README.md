@@ -117,6 +117,21 @@ The per-class validation Dice scores at the selected checkpoint were:
 | 4 | 0.8915 |
 | 5 | 0.8440 |
 
+### Baseline Training Curves
+
+![Standard U-Net Training Curves](images/baseline_training_curves.png)
+
+**Figure 1.** Training and validation performance of the
+Standard U-Net over 10 epochs.
+
+The validation foreground macro Dice reached its highest
+value of 0.9109 at Epoch 6. Although training loss continued
+to decrease, validation performance fluctuated after Epoch 6,
+suggesting possible overfitting.
+
+Therefore, the checkpoint from Epoch 6 was selected for
+subsequent evaluation.
+
 The foreground macro Dice excludes the background class.
 
 The validation Dice peaked at Epoch 6 and fluctuated afterward, even though training loss continued to decrease. This suggests possible overfitting during later epochs.
@@ -228,7 +243,24 @@ The second command is a partial functionality check, not a complete benchmark.
 
 **Dependencies:** Python, PyTorch, NumPy, NiBabel, and Matplotlib.
 
-TODO: Record the exact installed library versions and full reproducibility commands.
+### Software Environment
+
+The experiments were conducted on the UQ Rangpur HPC cluster.
+
+The verified software versions are:
+
+| Software | Version |
+|---|---|
+| Python | 3.11.13 |
+| PyTorch | 2.14.1+cu130 |
+| NumPy | 2.4.6 |
+| NiBabel | 5.4.2 |
+| Matplotlib | 3.11.2 |
+
+GPU training was performed using an NVIDIA A100 GPU.
+
+The dataset is stored on Rangpur and is not included
+in the GitHub repository.
 
 Model checkpoints and the original medical imaging dataset are not included in the Git repository.
 
