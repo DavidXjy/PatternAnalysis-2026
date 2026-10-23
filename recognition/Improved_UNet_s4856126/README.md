@@ -10,7 +10,7 @@
 
 Accurate medical image segmentation is important for radiotherapy planning, where clinicians must distinguish target structures from surrounding healthy tissue. In pelvic MRI, anatomical boundaries may be difficult to identify because of low soft-tissue contrast, variation between patients, and small target structures.
 
-This project investigates whether an Improved 2D U-Net with residual convolutional blocks can provide more accurate anatomical segmentation than a standard 2D U-Net.
+This project investigates whether an Improved 2D U-Net with residual convolutional blocks can provide more accurate anatomical segmentation than a Standard 2D U-Net.
 
 The central research question is whether additional architectural complexity improves segmentation accuracy, particularly around small structures and challenging boundaries, sufficiently to justify its computational cost.
 
@@ -30,9 +30,11 @@ The 2D dataset is located at:
 
 Each sample consists of an MRI slice and a corresponding segmentation mask stored in NIfTI format (`.nii.gz`).
 
-The segmentation masks contain six numerical labels, from 0 to 5. The numerical labels represent the background and annotated anatomical regions; their authoritative numerical-to-anatomical mapping remains unverified in the available local metadata.
+The segmentation masks contain six numerical labels, from 0 to 5. These represent the background and annotated anatomical structures.
 
-Visual inspection suggests that raw Label 5 may correspond to the prostate, but the numerical-to-anatomical mapping could not be confirmed from the inspected dataset metadata. Results are therefore reported using raw label IDs until an authoritative mapping is established.
+The official numerical-to-anatomical label mapping was not available in the inspected local dataset metadata. Although visual inspection suggests that raw Label 5 may correspond to the prostate, this has not been authoritatively confirmed.
+
+Therefore, results are reported using raw label IDs until the mapping is verified.
 
 ### 2.2 Dataset Splitting
 
@@ -44,30 +46,32 @@ The dataset contains the following predefined partitions:
 | Validation | 660 | 4 |
 | Test | 540 | 3 |
 
-The patient groups are disjoint across all three partitions, as verified using patient identifiers extracted from the image filenames.
+The patient groups are disjoint across all three partitions, as verified using patient identifiers extracted from image filenames.
 
-Patient-level separation is essential because different MRI slices from the same patient may contain highly correlated anatomical information. Mixing slices from one patient across training and testing could artificially inflate the reported performance.
+Patient-level separation is essential because different MRI slices from the same patient may contain highly correlated anatomical information. Mixing slices from one patient across training and testing could artificially inflate reported performance.
 
-The training partition is used to optimize model parameters, the validation partition is used for checkpoint selection, and the test partition is reserved for final model evaluation.
+The training partition is used to optimize model parameters, the validation partition is used for checkpoint selection, and the test partition is reserved for final evaluation.
 
 ### 2.3 Preprocessing
 
-The preprocessing pipeline implemented in `dataset.py` includes:
+The data-loading and preprocessing pipeline includes:
 
 1. Loading MRI slices and segmentation masks using NiBabel.
 2. Matching MRI files with their corresponding segmentation masks.
 3. Checking image-mask alignment, dimensionality, and label validity.
-4. Resizing variable-sized slices to 256 × 128 pixels when necessary.
-5. Applying bilinear interpolation to MRI images and nearest-neighbour interpolation to segmentation masks.
-6. Applying per-slice Z-score intensity normalisation.
-7. Converting images into floating-point PyTorch tensors and segmentation masks into integer class labels.
+4. Using the 256 × 128 spatial resolution of the prepared 2D slices.
+5. Applying per-slice Z-score intensity normalisation.
+6. Converting MRI images into floating-point PyTorch tensors.
+7. Converting segmentation masks into integer class labels.
 8. Applying random intensity augmentation to the training partition only.
 
-Nearest-neighbour interpolation is used for masks to preserve discrete class identities. Bilinear interpolation is used for the continuous MRI intensity values.
+MRI intensity normalisation is applied without changing segmentation class identities.
+
+Where image resampling is required for testing or preprocessing, continuous MRI intensities should use bilinear interpolation and categorical masks should use nearest-neighbour interpolation to preserve valid class labels.
 
 The resulting input MRI tensor has shape `(1, 256, 128)`, while the corresponding multiclass mask has shape `(256, 128)`.
 
-The network predicts six segmentation classes at the original preprocessed spatial resolution.
+The network predicts six segmentation classes at the input spatial resolution.
 
 ## 3. Baseline: Standard 2D U-Net
 
@@ -77,13 +81,13 @@ The baseline is a Standard 2D U-Net implemented in `modules.py`.
 
 The model consists of an encoder, a bottleneck, and a decoder connected by skip connections.
 
-The encoder progressively reduces spatial resolution while learning increasingly abstract visual features. The decoder reconstructs the segmentation map using upsampling and features transferred from the corresponding encoder stages.
+The encoder progressively reduces spatial resolution while learning increasingly abstract visual features. The decoder reconstructs the segmentation map using upsampling and features transferred from corresponding encoder stages.
 
 Skip connections preserve spatial information that might otherwise be lost during downsampling, which is especially important for segmentation boundaries.
 
 The model uses convolutional layers, batch normalisation, ReLU activations, pooling, and upsampling operations.
 
-It accepts a one-channel MRI image and produces six-channel segmentation logits, one channel for each raw segmentation label.
+It accepts a one-channel MRI image and produces six-channel segmentation logits.
 
 ### 3.2 Training Configuration
 
@@ -103,7 +107,7 @@ The baseline was trained on an NVIDIA A100 GPU using the following configuration
 
 The model was evaluated on the validation partition after each epoch.
 
-The checkpoint with the highest foreground macro Dice was saved automatically.
+The checkpoint with the highest validation foreground macro Dice was saved automatically.
 
 ### 3.3 Baseline Validation Results
 
@@ -138,11 +142,11 @@ Validation foreground macro Dice reached its highest value of 0.9109 at Epoch 6.
 
 Although training loss continued to decrease, validation performance fluctuated after Epoch 6, suggesting possible overfitting or training variability.
 
-The best-performing checkpoint was therefore selected from Epoch 6 and saved as:
+The best-performing checkpoint was selected from Epoch 6 and saved as:
 
 `checkpoints/baseline_unet.pt`
 
-These results represent validation performance, not the independent test-set performance.
+These results represent validation performance rather than independent test-set performance.
 
 ## 4. Improved 2D U-Net
 
@@ -167,7 +171,7 @@ Here:
 - `F(x)` represents the transformation learned by the convolutional layers.
 - `S(x)` represents the residual shortcut.
 - The shortcut is an identity mapping when channel dimensions match.
-- A 1 × 1 convolution is used when the input and output channel dimensions differ.
+- A 1 × 1 convolution is used when input and output channel dimensions differ.
 
 The shortcut allows features and gradients to propagate through the network more directly.
 
@@ -205,7 +209,7 @@ The Improved U-Net was trained using:
 | Base channels | 16 |
 | Input resolution | 256 × 128 |
 
-The training and validation partitions and preprocessing pipeline were identical to those used for the Standard U-Net.
+The training and validation partitions and preprocessing pipeline were identical to those used for Standard U-Net.
 
 The primary experimental difference was the model architecture.
 
@@ -236,7 +240,7 @@ The best checkpoint was saved as:
 
 `checkpoints/improved_unet.pt`
 
-The Improved U-Net achieved a lower final training loss than the Standard U-Net, but its best validation foreground macro Dice was slightly lower.
+The Improved U-Net achieved a lower final training loss than Standard U-Net, but its best validation foreground macro Dice was slightly lower.
 
 This indicates that adding residual blocks did not produce a clear validation accuracy improvement in the current 10-epoch experiment.
 
@@ -250,216 +254,350 @@ However, one training run per architecture is insufficient to establish whether 
 
 The Improved U-Net achieved its highest validation foreground macro Dice of 0.9039 at Epoch 10.
 
-Although the training loss decreased steadily, validation Dice fluctuated throughout training. Compared with the Standard U-Net, the improved architecture achieved lower final training loss but slightly lower best validation Dice.
+Although training loss decreased steadily, validation Dice fluctuated throughout training. Compared with Standard U-Net, the improved architecture achieved lower final training loss but slightly lower best validation Dice.
 
 These findings suggest that residual connections did not produce a clear generalisation advantage under the current experimental configuration.
 
 ## 5. Feasibility Review
-# Feasibility Review: Improved 2D U-Net for HipMRI Segmentation
 
-**Course:** COMP3710 Pattern Recognition  
+**Project:** Improved 2D U-Net for HipMRI Segmentation  
 **Student ID:** s4856126  
-**Difficulty:** Normal  
-**Project:** Medical Image Segmentation using an Improved 2D U-Net
+**Difficulty:** Normal
 
-### 1. User Need, Scope and Acceptance Criteria
+### 5.1 User Need, Scope and Acceptance Criteria
 
-The intended users are medical imaging specialists involved in prostate radiotherapy planning. Manual delineation of anatomical structures from pelvic MRI is time-consuming, while inaccurate boundaries may affect treatment planning.
+This project investigates automated contour proposals for pelvic MRI to assist medical imaging specialists in prostate radiotherapy planning.
 
-The proposed system will investigate an Improved 2D U-Net that generates multiclass anatomical segmentation predictions from MRI slices. It is intended as a research prototype to assist human review, not as an autonomous clinical system.
+The system is intended for expert review, not autonomous clinical use.
 
 The acceptance criteria are:
 
-1. Maintain strictly independent patient-level training, validation, and test partitions.
-2. Aim for prostate Dice ≥ 0.75 on the held-out test set, using a verified anatomical label mapping.
-3. Benchmark the Improved U-Net against a Standard U-Net using per-class Dice and IoU.
-4. Measure computational cost, including model parameters, peak GPU memory, and inference time.
-5. Investigate 3–5 representative segmentation failures, particularly around small anatomical structures and uncertain boundaries.
+1. Maintain independent patient-level training, validation and test splits.
+2. Target prostate Dice ≥ 0.75 on the held-out test set after verifying the anatomical label mapping.
+3. Compare Standard U-Net and Improved U-Net using per-class Dice and IoU.
+4. Measure model parameters, peak GPU memory and inference latency.
+5. Investigate 3–5 actual segmentation failures involving small targets and ambiguous boundaries.
 
-### 2. Model Choice and Course Concepts
+### 5.2 Model Choice and Course Concepts
 
-The project uses the HipMRI Study dataset available on the UQ Rangpur HPC cluster, specifically the 2D MRI slices and corresponding segmentation masks.
+The project uses HipMRI 2D slices available on the UQ Rangpur HPC cluster.
 
-A Standard 2D U-Net will serve as the baseline. The proposed improvement introduces residual convolutional blocks into the U-Net encoder-decoder architecture.
+Standard 2D U-Net serves as the baseline, while Improved 2D U-Net introduces residual convolutional blocks into the encoder-decoder architecture.
 
-This design applies COMP3710 concepts including convolutional neural networks, feature extraction, skip connections, residual learning, cross-entropy loss, backpropagation, and gradient-based optimization.
+The design draws on CNN feature extraction, U-Net skip connections, residual learning, cross-entropy loss and gradient-based optimization.
 
-The key research question is whether adding residual connections improves segmentation reliability enough to justify the additional computational complexity.
+The central research question is whether residual connections improve segmentation accuracy enough to justify the additional computational cost.
 
-### 3. Preliminary Feasibility Evidence
+### 5.3 Preliminary Feasibility Evidence
 
-An initial dataset audit confirmed:
+An initial dataset audit confirmed disjoint patient partitions and six numerical mask labels:
 
-| Partition | MRI Slices | Patients |
+| Partition | MRI slices | Patients |
 |---|---:|---:|
 | Training | 11,460 | 31 |
 | Validation | 660 | 4 |
 | Test | 540 | 3 |
 
-The patient groups do not overlap, reducing the risk of patient-level data leakage.
+The prepared 2D slices use 256 × 128 pixels, with integer mask labels preserved.
 
-The segmentation masks contain six numerical labels (0–5). The preprocessing pipeline standardizes MRI inputs to 256 × 128 pixels and applies intensity normalization while preserving discrete segmentation labels.
+Data-loading, tensor-shape, and forward/backward smoke tests demonstrated an operational PyTorch training pipeline.
 
-Initial data-loading and model smoke tests demonstrated that the dataset and PyTorch training pipeline are technically feasible.
+### 5.4 Risks, Computing Budget and Fallback
 
-### 4. Risks, Computing Budget and Fallback
+The main risks include class imbalance, small or ambiguous boundaries, limited patient diversity, overfitting, lack of 3D context, and uncertainty in the numerical-to-anatomical label mapping.
 
-The main risks are class imbalance, uncertain anatomical boundaries, limited patient diversity, potential overfitting, and the absence of inter-slice context in a 2D model. The numerical-to-anatomical label mapping also requires verification before prostate-specific conclusions can be made.
+Experiments use NVIDIA A100 GPUs through Rangpur Slurm, with an initial configuration of 10 epochs, batch size 8 and a three-hour training-job allocation.
 
-Experiments will use the NVIDIA A100 GPUs available through Rangpur, with an initial training configuration of 10 epochs, batch size 8, and a three-hour Slurm allocation per training experiment.
+The original plan was to train both networks, benchmark them on held-out test data, profile computational resources and inspect difficult segmentation cases.
 
-The next planned steps are to train both architectures, compare their validation and independent test performance, profile resource usage, and inspect difficult segmentation cases.
+Standard U-Net remains the fallback if residual blocks provide insufficient benefit.
 
-If the Improved U-Net offers insufficient accuracy improvement or introduces excessive computational cost, the Standard U-Net will remain the fallback.
-
-**Expected outcome:** A reproducible baseline comparison and evidence-based recommendation on whether residual connections provide practical value for 2D HipMRI segmentation.
-
-### 5.1 User Need and Project Scope
-
-The intended user is a medical imaging specialist who may benefit from automated initial contour proposals during radiotherapy planning.
-
-The prototype aims to segment anatomical structures from 2D pelvic MRI images, allowing a human specialist to inspect and refine predicted boundaries.
-
-The system is designed for experimental investigation rather than autonomous clinical use.
-
-### 5.2 Acceptance Criteria
-
-The proposed acceptance criteria are:
-
-1. Verify that training, validation, and test partitions contain no overlapping patients.
-2. Demonstrate successful six-class MRI segmentation inference.
-3. Evaluate prostate Dice against the assignment target of at least 0.75 on the held-out test set once the anatomical label mapping is verified.
-4. Compare Standard U-Net and Improved U-Net using Dice, IoU, parameter count, peak GPU memory, and inference latency.
-5. Analyse at least three challenging segmentation cases using ground-truth and prediction comparisons.
-
-### 5.3 Model Choice and Course Concepts
-
-The selected model is a 2D Residual U-Net within the Normal Difficulty category.
-
-Its design applies core COMP3710 concepts including convolutional neural networks, hierarchical feature extraction, encoder-decoder architectures, skip connections, residual learning, loss functions, and gradient-based optimization.
-
-A Standard 2D U-Net is used as the baseline to isolate the influence of the architectural improvement.
-
-### 5.4 Preliminary Feasibility Evidence
-
-The dataset loading pipeline was verified using actual HipMRI samples.
-
-Data inspection confirmed six raw segmentation classes and patient-independent training, validation, and test partitions.
-
-The Standard U-Net successfully completed 10 epochs and achieved a best validation foreground macro Dice of 0.9109.
-
-The Improved U-Net subsequently completed 10 epochs and achieved a best validation foreground macro Dice of 0.9039.
-
-Both models passed output-shape and forward/backward smoke tests; baseline inference was also verified using a test image. Full independent test evaluation remains pending.
-
-These results demonstrate that the implementation and training pipeline are operational.
-
-### 5.5 Risks, Computing Budget, and Fallback
-
-Potential risks include:
-
-- Uncertainty in the numerical anatomical label mapping.
-- Severe class imbalance involving smaller target structures.
-- Overfitting due to limited patient diversity.
-- Segmentation errors near ambiguous anatomical boundaries.
-- Additional computational cost from residual blocks.
-- Limited evidence from single-run experiments.
-
-Training jobs were submitted through the Rangpur Slurm scheduler with an NVIDIA A100 GPU.
-
-The improved-model training job completed in 16 minutes and 7 seconds, within its allocated three-hour runtime limit.
-
-If the improved architecture fails to demonstrate meaningful performance gains, the trained Standard U-Net remains an appropriate baseline and potential fallback.
-
-**Compulsory practical check-off status:** To be confirmed against the tutor's completion record. Including this review in the README does not replace the required consultation.
+**Practical check-off status:** Tutor consultation pending. Completion must be recorded by the teaching team independently of this written review.
 
 ## 6. Experimental Comparison
 
 ### 6.1 Validation Performance
 
-The two models were trained for 10 epochs using the same data partitions and principal training hyperparameters.
+Both models were trained for 10 epochs using the same dataset partitions and principal training hyperparameters.
 
 | Metric | Standard U-Net | Improved U-Net |
 |---|---:|---:|
 | Training epochs | 10 | 10 |
 | Best validation epoch | 6 | 10 |
 | Best validation foreground macro Dice | **0.9109** | 0.9039 |
-| Label 5 validation Dice at selected checkpoint | **0.8440** | 0.8365 |
+| Label 5 validation Dice | **0.8440** | 0.8365 |
 | Final training loss | 0.0265 | **0.0239** |
 | Trainable parameters | 1,942,374 | 2,030,902 |
 
 The Standard U-Net achieved approximately 0.0070 higher validation foreground macro Dice.
 
-For raw Label 5, the Standard U-Net achieved approximately 0.0075 higher Dice at its selected checkpoint.
+For raw Label 5, Standard U-Net achieved approximately 0.0075 higher Dice.
 
-Although Improved U-Net produced lower training loss, it did not outperform the baseline on the selected validation accuracy metrics.
+Although Improved U-Net produced lower training loss, it did not outperform the baseline on validation accuracy.
 
-This suggests that the additional residual structure did not provide a measurable advantage in this experiment.
+This suggests that additional residual structure did not provide a measurable validation accuracy advantage in the current experiment.
 
-Potential explanations include different optimization dynamics, limited training diversity, architecture-specific inductive biases, and ordinary random variation between training runs.
+Possible explanations include differences in optimization dynamics, limited training diversity, architecture-specific inductive biases and ordinary random variation between training runs.
 
-The conclusion remains preliminary until the independent test-set comparison is complete.
+The independent test results and case-specific errors are analysed below.
 
 ### 6.2 Independent Test Set Evaluation
 
-The independent test partition contains 540 MRI slices from three patients.
+Both selected checkpoints were evaluated on the complete held-out test partition containing **540 MRI slices from three patients**.
 
-Both trained models will be evaluated on the same test partition using the shared `evaluate.py` script.
+The same `evaluate.py` script, GPU device and batch size of 8 were used for both models.
 
-This evaluation calculates per-class Dice and Intersection-over-Union (IoU) by accumulating confusion counts over the evaluation dataset.
+Each class Dice and Intersection-over-Union (IoU) was computed by accumulating pixel-level confusion counts across the full test partition, rather than averaging per-slice Dice scores.
 
-This aggregation method must be distinguished from alternative methods such as averaging per-slice Dice values.
+#### Per-class Dice and IoU
 
-**Test evaluation status:** Submitted to Rangpur; final results pending.
+| Raw label | Standard Dice | Improved Dice | Standard IoU | Improved IoU |
+|---|---:|---:|---:|---:|
+| 0 | 0.9969 | 0.9970 | 0.9939 | 0.9940 |
+| 1 | 0.9844 | 0.9845 | 0.9693 | 0.9694 |
+| 2 | 0.9353 | 0.9353 | 0.8784 | 0.8785 |
+| 3 | **0.9654** | 0.9640 | **0.9331** | 0.9304 |
+| 4 | **0.8424** | 0.8358 | **0.7277** | 0.7180 |
+| 5 | **0.8637** | 0.8511 | **0.7600** | 0.7408 |
+
+#### Overall Performance and Resource Comparison
 
 | Metric | Standard U-Net | Improved U-Net |
-|---|---|---|
-| Test foreground macro Dice | TODO | TODO |
-| Test Label 5 Dice | TODO | TODO |
-| Test Label 5 IoU | TODO | TODO |
-| Mean inference time per image | TODO | TODO |
-| Peak allocated GPU memory | TODO | TODO |
-| Trainable parameters | 1,942,374 | 2,030,902 |
+|---|---:|---:|
+| Test mean foreground Dice | **0.9182** | 0.9141 |
+| Test Label 5 Dice | **0.8637** | 0.8511 |
+| Test Label 5 IoU | **0.7600** | 0.7408 |
+| Inference time per image | 2.455 ms | 1.376 ms |
+| Peak allocated GPU memory | **149.47 MB** | 165.82 MB |
+| Trainable parameters | **1,942,374** | 2,030,902 |
 
-The test results will be reported only after the corresponding GPU evaluation job has completed successfully.
+On the independent test set, Standard U-Net achieved a mean foreground Dice of **0.9182**, compared with **0.9141** for Improved U-Net.
 
-Raw Label 5 results will not be described as confirmed prostate-specific results until the anatomical mapping is verified.
+The difference was approximately **0.0041** in favour of the baseline.
+
+For raw Label 5, Standard U-Net achieved Dice **0.8637** and IoU **0.7600**, while Improved U-Net achieved Dice **0.8511** and IoU **0.7408**.
+
+This represents a Dice advantage of approximately **0.0126** for Standard U-Net on raw Label 5.
+
+Both models achieved raw Label 5 Dice above 0.75. However, this result must not be described as confirmed prostate Dice until the numerical-to-anatomical label mapping is verified.
+
+The official target of Dice ≥ 0.75 refers specifically to the prostate label.
+
+The test metric aggregation differs from the reporting procedure used in some training experiments. Therefore, comparisons between architectures use results produced by the same complete test evaluation script.
+
+Only three patients are represented in the test partition. These findings should not be interpreted as evidence of general clinical performance.
+
+The evaluation produced the following files:
+
+- `outputs/evaluation/baseline_test_cuda.json`
+- `outputs/evaluation/baseline_test_cuda.csv`
+- `outputs/evaluation/improved_test_cuda.json`
+- `outputs/evaluation/improved_test_cuda.csv`
 
 ### 6.3 Resource Efficiency
 
-Besides segmentation accuracy, practical deployment requires consideration of computational cost.
+Computational efficiency is an important consideration for deploying segmentation models in practical annotation workflows.
 
-The comparison will include model parameter count, inference latency, and peak GPU memory allocation under a consistent test configuration.
+Standard U-Net contains **1,942,374 trainable parameters**, while Improved U-Net contains **2,030,902 parameters**.
 
-A more complex model should be preferred only if its performance improvements justify the additional resource requirements.
+The residual architecture therefore adds **88,528 parameters**, representing a **4.56% increase** relative to the baseline.
 
-Measurements from `evaluate.py` will provide an initial technical comparison. Inference time measurements should be interpreted with consideration of hardware, batch size, and measurement methodology.
+The measured peak allocated GPU memory was:
 
-The Standard U-Net contains 1,942,374 trainable parameters, while the Improved U-Net contains 2,030,902 trainable parameters. The residual architecture therefore adds 88,528 parameters, an increase of approximately 4.56% relative to the baseline.
+- Standard U-Net: **149.47 MB**
+- Improved U-Net: **165.82 MB**
 
-Despite this increase in model size, the Improved U-Net achieved a lower best validation foreground macro Dice (0.9039) than the Standard U-Net (0.9109). Additional parameters did not provide a validation accuracy advantage in this single-run experiment. Final evaluation of computational efficiency awaits comparable GPU memory and inference latency measurements.
+This represents an approximately **10.94% increase** in peak allocated GPU memory for the residual architecture.
+
+The recorded inference times were:
+
+- Standard U-Net: **2.455 ms per image**
+- Improved U-Net: **1.376 ms per image**
+
+The Improved U-Net recorded a shorter inference time in this evaluation. However, these values were obtained from a single evaluation procedure rather than a repeated, warmed-up latency benchmark.
+
+Therefore, the apparent speed advantage should be interpreted cautiously and should not be treated as evidence of consistently faster inference.
+
+Peak allocated CUDA memory also measures allocated tensor memory rather than total physical GPU memory consumption.
+
+Overall, Improved U-Net required more parameters and allocated GPU memory but did not achieve higher test foreground Dice.
+
+This demonstrates that greater architectural complexity does not necessarily produce better segmentation accuracy or a more favourable engineering trade-off.
 
 ## 7. Qualitative Failure Case Analysis
 
-Global Dice scores may hide local segmentation errors, especially in small structures and difficult boundary regions.
+### 7.1 Evaluation Method
 
-The `failure_cases.py` script compares both models on identical MRI slices and identifies informative cases according to their segmentation errors.
+Global Dice scores can hide important local errors, particularly in small structures and uncertain anatomical boundaries.
 
-The analysis records:
+The `failure_cases.py` script evaluated both models on the same held-out test slices and identified five informative failure cases for raw Label 5.
 
-- Dice for the selected raw label on individual slices.
-- Differences between Standard and Improved U-Net predictions.
-- False-positive segmentation pixels.
-- False-negative segmentation pixels.
-- Cases where either model has particularly low segmentation accuracy.
+For each selected image, the script generated an eight-panel comparison containing:
 
-The intended analysis includes approximately five representative test cases selected from actual model predictions.
+1. Original MRI image.
+2. Ground-truth raw Label 5 mask.
+3. Standard U-Net prediction overlay.
+4. Improved U-Net prediction overlay.
+5. Standard U-Net false-positive region.
+6. Standard U-Net false-negative region.
+7. Improved U-Net false-positive region.
+8. Improved U-Net false-negative region.
 
-For each case, the analysis will investigate whether errors are associated with small target size, weak image contrast, uncertain boundaries, or disagreement between the two architectures.
+Ground-truth contours are displayed in red and prediction contours in green.
 
-**Failure-case image generation and case-specific interpretation:** TODO, pending completion and inspection of the analysis outputs.
+False-positive pixels are highlighted in red, while false-negative pixels are highlighted in blue.
 
-Patient-level MRI images and derived overlays will not be publicly redistributed without confirming the applicable data-sharing permissions.
+The investigation focuses on raw Label 5 because its precise anatomical correspondence has not yet been authoritatively verified.
+
+### 7.2 Case-by-Case Results
+
+The following five cases were selected from actual test-set predictions:
+
+| Test Index | GT Label 5 Pixels | Standard Dice | Improved Dice | Main Finding |
+|---|---:|---:|---:|---|
+| 8 | 16 | 0.0000 | 0.0000 | Both models miss a small target |
+| 73 | 42 | 0.0000 | 0.0000 | Both models miss the target |
+| 130 | 5 | 0.0000 | 0.0000 | Extremely small target is missed |
+| 250 | 171 | **0.8518** | 0.0568 | Improved U-Net suffers severe under-segmentation |
+| 335 | 108 | 0.2581 | **0.7219** | Improved U-Net substantially improves the prediction |
+
+#### Case 8: Small Target Missed by Both Models
+
+**Ground-truth Label 5 pixels:** 16  
+**Standard U-Net Dice:** 0.0000  
+**Improved U-Net Dice:** 0.0000
+
+The ground-truth mask contains a very small labelled region located near a prominent image structure.
+
+Neither model produced a corresponding successful segmentation of this region.
+
+The error maps show false-negative pixels in the ground-truth area, indicating that the annotated structure was omitted.
+
+This is an example of a complete missed-detection failure for both architectures.
+
+A plausible contributing factor is the extremely small target size relative to the full 256 × 128 input image.
+
+#### Case 73: Recurring Small-Structure Failure
+
+**Ground-truth Label 5 pixels:** 42  
+**Standard U-Net Dice:** 0.0000  
+**Improved U-Net Dice:** 0.0000
+
+Both models failed to segment the annotated Label 5 region.
+
+Although the target is larger than in Case 8, it still occupies a very small fraction of the total image.
+
+The false-negative overlays show that neither architecture recovered the expected region.
+
+This demonstrates that small-object detection remains a recurring weakness of both models rather than an isolated failure.
+
+The result also suggests that simply introducing residual connections is insufficient to eliminate small-target segmentation errors.
+
+#### Case 130: Extremely Small Target
+
+**Ground-truth Label 5 pixels:** 5  
+**Standard U-Net Dice:** 0.0000  
+**Improved U-Net Dice:** 0.0000
+
+This case contains an extremely small ground-truth region consisting of only five pixels.
+
+Neither model produced an overlapping prediction.
+
+This type of structure may be particularly difficult to recognise because of spatial information loss during encoder downsampling, severe class imbalance, and uncertainty around the precise annotated boundary.
+
+These factors are plausible explanations, but the exact causal mechanism cannot be determined from one image alone.
+
+The case highlights a limitation of slice-based segmentation when the target occupies only a tiny fraction of the input.
+
+#### Case 250: Severe Under-Segmentation by Improved U-Net
+
+**Ground-truth Label 5 pixels:** 171  
+**Standard U-Net Dice:** 0.8518  
+**Improved U-Net Dice:** 0.0568
+
+This is one of the most important cases in the experiment.
+
+Standard U-Net successfully identified most of the annotated target region, with its prediction boundary closely following the ground-truth contour.
+
+In contrast, Improved U-Net predicted only a small part of the target.
+
+Its false-negative overlay shows that a substantial portion of the annotated region was omitted.
+
+This represents severe under-segmentation and a major decrease in local Dice.
+
+The difference between the models is approximately **0.7949 Dice** in favour of Standard U-Net.
+
+Importantly, this target contains 171 pixels and is not an extremely small five-pixel structure.
+
+Therefore, the failure cannot be explained solely by the target being exceptionally small.
+
+The case demonstrates that a more complex architecture may produce unstable local predictions even when its overall segmentation performance remains relatively high.
+
+#### Case 335: Improved U-Net Successfully Recovers More of the Target
+
+**Ground-truth Label 5 pixels:** 108  
+**Standard U-Net Dice:** 0.2581  
+**Improved U-Net Dice:** 0.7219
+
+This case shows the opposite pattern to Case 250.
+
+Standard U-Net identified only a limited part of the ground-truth target, resulting in a low Dice score of 0.2581.
+
+Improved U-Net produced a segmentation that overlapped substantially more of the annotated region.
+
+The false-negative area was reduced, and Dice increased to 0.7219.
+
+The improvement was approximately **0.4638 Dice**.
+
+This provides evidence that residual connections can be beneficial for particular difficult slices.
+
+However, the improvement was not consistent across all cases and did not translate into better overall test Dice.
+
+### 7.3 Cross-Case Interpretation
+
+The five cases demonstrate three important findings.
+
+**First, both models struggle with extremely small anatomical regions.**
+
+Cases 8, 73 and 130 all produced Dice scores of zero for both architectures.
+
+This indicates a recurring failure mode involving small or weakly represented target structures.
+
+**Second, residual connections do not guarantee greater boundary reliability.**
+
+Case 335 demonstrated a substantial improvement from the residual architecture, whereas Case 250 demonstrated a severe deterioration.
+
+The same architectural modification can therefore produce very different local effects across images.
+
+**Third, high average Dice can conceal serious segmentation failures.**
+
+Both architectures achieved test foreground macro Dice above 0.91, yet several selected slices were segmented poorly or completely missed.
+
+These cases were deliberately selected for difficult behaviour and are not representative of the failure frequency across the entire test partition.
+
+They provide qualitative evidence about failure modes rather than an unbiased estimate of general model reliability.
+
+This directly addresses the project's engineering dilemma: improving architectural complexity does not automatically ensure safer or more reliable anatomical boundaries.
+
+### 7.4 Practical Implications and Future Improvements
+
+For a human-in-the-loop anatomical contouring system, automatically generated masks should be treated as editable proposals rather than final clinical annotations.
+
+Particular attention should be given to slices containing:
+
+- Very small labelled regions.
+- Missing target predictions.
+- Large false-negative areas.
+- Ambiguous anatomical boundaries.
+- Strong disagreements between different model predictions.
+
+Potential future improvements include class-balanced loss functions, Dice-based training objectives, stronger sampling of small targets, and architectures that incorporate information across adjacent MRI slices.
+
+These are proposed improvements rather than additional experiments performed in this submission.
+
+The five complete eight-panel comparison figures and the corresponding `test_case_metrics.csv` were generated from real test data.
+
+Patient-level MRI figures are retained in private research outputs pending confirmation of public redistribution permissions. They are not included in the public GitHub repository at this stage.
 
 ## 8. Usage and Reproducibility
 
@@ -467,13 +605,13 @@ Patient-level MRI images and derived overlays will not be publicly redistributed
 
 | File | Purpose |
 |---|---|
-| `dataset.py` | Data loading, preprocessing, augmentation, and split verification |
+| `dataset.py` | Data loading, preprocessing, augmentation and split verification |
 | `modules.py` | Standard U-Net architecture |
 | `improved_modules.py` | Improved Residual U-Net architecture |
 | `train.py` | Baseline training and validation |
 | `train_improved.py` | Improved-model training using the shared pipeline |
 | `predict.py` | Segmentation inference and visualisation |
-| `evaluate.py` | Dataset-level Dice, IoU, and resource evaluation |
+| `evaluate.py` | Dataset-level Dice, IoU and resource evaluation |
 | `failure_cases.py` | Failure-case selection and visual analysis |
 | `README.md` | Project documentation and experimental report |
 
@@ -491,7 +629,7 @@ The verified software versions are:
 | NiBabel | 5.4.2 |
 | Matplotlib | 3.11.2 |
 
-GPU training was performed using NVIDIA A100 hardware.
+GPU training and evaluation were performed using NVIDIA A100 hardware.
 
 The original dataset is stored on Rangpur and is not included in the repository.
 
@@ -519,7 +657,7 @@ Example improved-model inference:
 
 `python predict.py --model improved --index 0`
 
-The prediction script loads the selected trained checkpoint, generates a segmentation prediction, and saves a visual comparison.
+The prediction script loads the selected trained checkpoint, generates a segmentation prediction and saves a visual comparison.
 
 ### 8.5 Evaluation
 
@@ -529,7 +667,7 @@ A lightweight evaluation functionality check can be run using:
 
 This command evaluates only two validation slices and does not produce a representative accuracy benchmark.
 
-Full test-set evaluation can be performed with:
+Full test-set evaluation can be performed using:
 
 `python evaluate.py --model baseline --split test --device cuda --batch-size 8`
 
@@ -537,59 +675,106 @@ Full test-set evaluation can be performed with:
 
 The evaluation script saves numerical results as CSV and JSON files.
 
+Failure-case analysis can be performed using:
+
+`python failure_cases.py --split test --device cuda --label 5 --top-k 5 --batch-size 8`
+
+Full GPU evaluations should be executed through the Rangpur Slurm scheduler.
+
 ### 8.6 Reproducibility Notes
 
 Model selection is performed using validation performance rather than test-set performance.
 
 The same predefined data partitions are retained for both architectures.
 
-Model checkpoints, full training data, and generated outputs are stored separately from the source-code repository.
+Model checkpoints, full training data and generated outputs are stored separately from the source-code repository.
 
 Reported numerical performance is based on actual model training and evaluation logs rather than synthetic or illustrative values.
 
-A single experimental run does not quantify variance across random seeds. More extensive repeat experiments would be necessary to determine the statistical robustness of any observed performance difference.
+A single experimental run does not quantify variance across random seeds. More extensive repeat experiments would be necessary to determine the statistical robustness of observed performance differences.
 
 ## 9. Engineering Recommendation
 
-### 9.1 Preliminary Recommendation
+### 9.1 Overall Recommendation
 
-Based on the completed validation experiments, the Standard U-Net currently provides a slightly stronger segmentation benchmark than the Improved U-Net.
+Based on the completed validation and independent test-set experiments, **Standard U-Net is the recommended architecture for further development under the current experimental conditions**.
 
-The baseline achieved a validation foreground macro Dice of 0.9109, compared with 0.9039 for the residual architecture.
+On the same held-out test partition, Standard U-Net achieved:
 
-This suggests that additional architectural complexity does not automatically improve segmentation quality.
+- Higher mean foreground Dice: **0.9182 versus 0.9141**.
+- Higher raw Label 5 Dice: **0.8637 versus 0.8511**.
+- Fewer parameters: **1,942,374 versus 2,030,902**.
+- Lower peak allocated GPU memory: **149.47 MB versus 165.82 MB**.
 
-The Improved U-Net achieved lower training loss, but that reduction did not translate into better validation Dice.
+The residual architecture achieved lower training loss but did not provide a global test Dice advantage.
 
-### 9.2 Deployment Considerations
+Although Improved U-Net recorded shorter inference latency in the initial measurement, this result requires repeated, warmed-up benchmarking before a consistent speed advantage can be established.
 
-For an annotation-assistance workflow, model selection should consider not only average segmentation accuracy but also boundary reliability, small-structure performance, inference speed, and GPU resource requirements.
+Therefore, Standard U-Net currently provides the more favourable combination of segmentation accuracy and model footprint.
 
-The models have not been clinically validated, and high global Dice alone is insufficient evidence for safe autonomous radiotherapy contouring.
+### 9.2 Error Reliability and Operational Risk
 
-### 9.3 Final Recommendation
+The five failure cases demonstrate that both models can completely miss very small annotated regions.
 
-**Pending:** Complete the independent test-set comparison and inspect representative segmentation failures before making the final recommendation.
+The residual architecture improved Case 335 substantially but also failed dramatically in Case 250, where Standard U-Net performed well.
 
-If the Improved U-Net does not offer clinically relevant accuracy improvements and requires additional computational resources, the Standard U-Net would be the more efficient choice for further research.
+These contrasting cases illustrate why average segmentation metrics alone cannot establish boundary reliability.
 
-If the improved architecture provides better performance on important difficult cases, the extra cost may be justified despite a slightly lower global validation Dice.
+In radiotherapy planning, missed or incorrectly included anatomical regions may have important clinical consequences.
 
-The final recommendation will be based on the measured trade-off rather than architectural complexity alone.
+Consequently, automated segmentation predictions should be treated as proposals that require specialist verification.
+
+Particular caution is necessary around small targets, missing regions and uncertain boundaries.
+
+Additional safeguards such as uncertainty estimation, cross-slice consistency analysis and targeted manual review may improve the safety of future systems.
+
+However, these safeguards were not implemented or validated in this experiment.
+
+### 9.3 Limitations and Future Work
+
+The present study has several limitations.
+
+The held-out test partition contains only three patients, which restricts the generalisability of the results.
+
+Each architecture was trained in a single 10-epoch experiment. Multiple random seeds would be required to assess training variability more reliably.
+
+The models operate on independent 2D slices and do not explicitly model continuity across adjacent MRI slices.
+
+The numerical-to-anatomical class mapping, including whether raw Label 5 represents the prostate, remains unverified.
+
+The inference time measurements were obtained from a single evaluation procedure rather than a repeated latency benchmark.
+
+Future work should focus on verifying anatomical labels, evaluating additional patients, experimenting with class-balanced or Dice-based loss functions, and investigating 3D or multi-slice architectures.
+
+Repeated benchmarking of GPU memory and inference latency would also strengthen the computational comparison.
+
+### 9.4 Final Recommendation to the Project Manager
+
+The experimental evidence does not justify selecting the residual architecture solely because it is more complex.
+
+Standard U-Net achieved slightly better global segmentation accuracy while requiring fewer parameters and less peak allocated GPU memory.
+
+Improved U-Net demonstrated a meaningful advantage on one difficult slice, but this was accompanied by severe deterioration on another.
+
+For the next stage of prototype development, Standard U-Net is recommended as the primary benchmark.
+
+Further research should focus on reducing small-structure detection failures and improving boundary reliability rather than increasing architectural complexity without targeted evidence of benefit.
+
+Neither model should be deployed as an autonomous clinical segmentation system without verified anatomical labels, more extensive patient-level testing and expert validation.
 
 ## 10. Artificial Intelligence Usage Disclosure
 
-ChatGPT was used to assist with understanding PyTorch concepts, developing and debugging data-loading and model-training code, preparing evaluation and visualisation scripts, interpreting diagnostic outputs, and structuring the project documentation.
+ChatGPT was used to assist with understanding PyTorch concepts, developing and debugging data-loading and model-training code, preparing evaluation and visualisation scripts, interpreting diagnostic outputs and structuring project documentation.
 
-AI assistance included suggestions for implementing residual blocks, structuring reproducible experiments, and identifying potential problems involving medical image preprocessing, data leakage, and model evaluation.
+AI assistance included suggestions for implementing residual blocks, structuring reproducible experiments, and identifying potential problems involving medical image preprocessing, data leakage and model evaluation.
 
-The suggested code was checked through dataset audits, patient-split verification, tensor shape tests, forward and backward propagation smoke tests, checkpoint inspection, and actual model training experiments on Rangpur.
+The suggested code was checked through dataset audits, patient-split verification, tensor shape tests, forward and backward propagation smoke tests, checkpoint inspection and actual training experiments on Rangpur.
 
 Both models completed 10-epoch training runs, and the training logs confirmed that best-validation checkpoints were saved.
 
-Final evaluation and visual error analysis are being performed using actual HipMRI data.
+Independent test-set evaluation and five visual failure-case analyses were completed using actual HipMRI data.
 
-The author remains responsible for validating the implementation, experimental claims, and conclusions. Unverified anatomical mappings and incomplete experiments are explicitly identified.
+The author remains responsible for validating the implementation, experimental claims and conclusions. Unverified anatomical mappings and experimental limitations are explicitly identified.
 
 ## 11. Data Acknowledgment and Usage Restrictions
 
@@ -609,11 +794,11 @@ The agreement prohibits commercial use of the dataset and attempts to identify o
 
 The dataset is used only for educational and non-commercial research purposes.
 
-The original MRI scans, segmentation masks, and trained model checkpoints are not distributed through this GitHub repository.
+The original MRI scans, segmentation masks and trained model checkpoints are not distributed through this GitHub repository.
 
 Public redistribution of patient-level MRI visualisations or derived overlays will only be considered after confirming the applicable permissions.
 
-The dataset providers do not guarantee the correctness of the provided data. Therefore, preprocessing assumptions, annotation quality, and anatomical label mappings must be independently checked where possible.
+The dataset providers do not guarantee the correctness of the provided data. Therefore, preprocessing assumptions, annotation quality and anatomical label mappings must be independently checked where possible.
 
 ### 11.3 Dataset Citation
 
@@ -626,7 +811,11 @@ This publication is included among the references specified in the HipMRI Study 
 ## 12. References
 
 1. The University of Queensland. *COMP3710/COMP7710 Pattern Recognition: Report Assessment Specification*. 2026.
+
 2. HipMRI Study. *HipMRI Study for MRI-alone Treatment Planning and Other Imaging*. https://doi.org/10.1016/j.ijrobp.2015.08.045
+
 3. Ronneberger, O., Fischer, P., and Brox, T. (2015). *U-Net: Convolutional Networks for Biomedical Image Segmentation*. arXiv:1505.04597. https://arxiv.org/abs/1505.04597
+
 4. He, K., Zhang, X., Ren, S., and Sun, J. (2016). *Deep Residual Learning for Image Recognition*. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. https://arxiv.org/abs/1512.03385
+
 5. HipMRI Study. *Data Use Agreement*. Distributed with the HipMRI Study dataset on the UQ Rangpur HPC cluster.
