@@ -5,7 +5,7 @@
 **Difficulty:** Normal (HipMRI 2D CAN)  
 **Framework:** PyTorch  
 **Dataset:** HipMRI Study  
-**Status:** Training, independent test benchmarking, case-level numerical analysis, and visual inspection of the five selected CAN-vs-baseline failure-case figures completed. The inspected images are not clinical validation and are not authorised for public redistribution.
+**Status:** Training, independent test benchmarking on 540 held-out slices, five-case failure analysis, and full-test-set bladder/rectum-to-prostate leakage analysis completed. Five selected error-map figures were visually inspected. The results are not clinical validation; patient-level MRI figures and analysis CSVs are not authorised for public redistribution without permission.
 
 ## 1. Introduction
 
@@ -15,7 +15,7 @@ Accurate medical image segmentation can support radiotherapy planning by helping
 
 This project implements a **Basic 2D U-Net baseline** and a **2D Context Aggregation Network (CAN)**, the latter selected from the Normal Difficulty segmentation options. Both models operate on the same HipMRI 2D slices, use the same patient-disjoint train/validation/test partitions and principal training settings, and are assessed on the complete held-out test set. CAN explores wider *in-plane* spatial context without a pooling-based encoder-decoder. It does **not** incorporate adjacent slices or full 3D continuity.
 
-The primary outcome is not that CAN must outperform the baseline. Instead, the purpose is to measure whether its design provides enough benefit in segmentation accuracy, local error behaviour and resource efficiency to justify its use. Neither network is a clinically validated system, and all predictions would require review by an imaging specialist.
+The primary outcome is not that CAN must outperform the baseline. Instead, the purpose is to measure whether its design provides enough benefit in segmentation accuracy, local error behaviour and resource efficiency to justify its use. In addition to overall Dice/IoU and five illustrative error cases, the completed analysis measures how often pixels annotated as **bladder** or **rectum** are incorrectly predicted as **prostate** across the full test set. Neither network is a clinically validated system, and all predictions would require review by an imaging specialist.
 
 ## 2. Dataset and Preprocessing
 
@@ -248,6 +248,7 @@ The acceptance criteria are:
 3. Compare the basic baseline and CAN using per-class Dice/IoU on identical test slices.
 4. Report parameters, peak allocated GPU memory and per-image inference latency under comparable conditions.
 5. Inspect **3–5 actual prostate failure cases**, with ground truth, model predictions, FP/FN maps and an actionable engineering interpretation.
+6. As an additional targeted analysis, count bladder-to-prostate and rectum-to-prostate label-confusion pixels across the entire held-out test partition.
 
 ### 5.2 Model Choice and Relevant Course Concepts
 
@@ -259,7 +260,7 @@ The baseline is a 2D U-Net with convolutional encoding, spatial downsampling, sk
 
 The dataset audit found **11,460 training slices from 31 patients, 660 validation slices from 4 patients and 540 test slices from 3 patients**, with disjoint patient identifiers. Images and masks use 256 × 128 resolution and six integer labels. A checked original 3D/processed 2D mask pair preserved foreground class values after orientation adjustment; the official dataset description confirms Label 5 as prostate.
 
-Both architectures passed forward/backward checks, and completed 10-epoch training runs on an A100. Their checkpoints were selected using validation macro Dice. The held-out comparison has been completed on all 540 test slices, with CAN prostate Dice **0.8557**, meeting the specified ≥ 0.75 threshold. The CAN-vs-baseline failure-case script also completed on the same 540-slice test split and generated five selected case visualisations and per-slice metric files. The numerical case results and the visual review of the five generated overlays are reported in Section 7.
+Both architectures passed forward/backward checks, and completed 10-epoch training runs on an A100. Their checkpoints were selected using validation macro Dice. The held-out comparison has been completed on all 540 test slices, with CAN prostate Dice **0.8557**, meeting the specified ≥ 0.75 threshold. The CAN-vs-baseline failure-case script also completed on the same 540-slice test split and generated five selected case visualisations and per-slice metric files. A further inference-only comparison counted **bladder-to-prostate** and **rectum-to-prostate** misclassifications over all 540 test slices using the same two saved checkpoints. The case results, visual review and additional organ-leakage counts are reported in Section 7. The unverified slice-number-end candidates produced incidentally by the analysis script are **not** presented as anatomical base/apex results.
 
 ### 5.4 Risks, GPU Budget and Fallback
 
@@ -338,7 +339,7 @@ In the same evaluation workflow, CAN's recorded time was **2.239 ms/image** vers
 
 This yields an instructive result: **parameter efficiency, allocated GPU memory and segmentation accuracy are distinct quantities**. A more compact model is not automatically more accurate, and it is not necessarily more memory-efficient during inference.
 
-## 7. Qualitative Failure Case Analysis
+## 7. Failure Case and Anatomical Label-Confusion Analysis
 
 ### 7.1 Evaluation Method
 
@@ -394,17 +395,62 @@ The following ten-panel figures were generated on Rangpur, with MRI, ground trut
 - `outputs/failure_cases_can/test_case_0483_baseline_vs_can.png`
 - `outputs/failure_cases_can/test_case_0316_baseline_vs_can.png`
 
-The complete selection data are in `outputs/failure_cases_can/test_selected_cases.csv`; the script also generated `test_all_target_slices.csv` for all test slices with ground-truth prostate pixels. The numerical FP/FN counts were checked against the **actual CSV**, and all five corresponding PNG overlays were visually inspected. The displayed binary masks, contour overlays and FP/FN regions were consistent with the recorded case-level results. Visual inspection here verifies the figures against the logged predictions; it does **not** identify prostate base/apex anatomy, quantify distance to other organs, establish clinical outcomes, or constitute independent clinical validation.
+The complete selection data are in `outputs/failure_cases_can/test_selected_cases.csv`; the script also generated `test_all_target_slices.csv` for all test slices with ground-truth prostate pixels. The numerical FP/FN counts were checked against the **actual CSV**, and all five corresponding PNG overlays were visually inspected. The displayed binary masks, contour overlays and FP/FN regions were consistent with the recorded case-level results. Visual inspection here verifies the figures against the logged predictions; it does **not** identify prostate base/apex anatomy, measure physical distances between anatomical boundaries, establish clinical outcomes, or constitute independent clinical validation. Section 7.6 separately quantifies two specific types of organ-label confusion.
 
 ### 7.5 Cross-Case Interpretation and Engineering Implications
 
 The selected cases provide direct evidence of **heterogeneous local behaviour**. CAN showed large improvements in Cases **74** and **483**, but complete target-overlap failure in Cases **513** and **187**; both models had low Dice in Case **316**. Importantly, the ground-truth target sizes range from **98 to 148 pixels**, so these failures are not restricted to vanishingly small, five-pixel targets.
 
-Together with the full test-set metrics, the evidence supports a qualified conclusion: increasing in-plane context through CAN **did not improve global prostate Dice** in this experiment, but the selected slices reveal benefits and risks obscured by aggregate scores. This does **not** establish the causal contribution of dilation alone, because CAN and U-Net differ in several architectural details. It also does not show whether either model is clinically safe at the prostate base/apex or interfaces with nearby organs.
+Together with the full test-set metrics, the evidence supports a qualified conclusion: increasing in-plane context through CAN **did not improve global prostate Dice** in this experiment, but the selected slices reveal benefits and risks obscured by aggregate scores. The additional whole-test-set organ-label confusion counts in Section 7.6 provide a more targeted comparison of two neighbouring structures. This does **not** establish the causal contribution of dilation alone, because CAN and U-Net differ in several architectural details. It also does not establish clinical safety or physically verified prostate base/apex performance.
 
-For a contour-proposal workflow, both models should remain **human-reviewed**, especially when the predicted prostate is absent, unusually small or inconsistent with clinical expectations. A manager should not choose CAN solely for its small parameter count or treat the mean Dice as a guarantee for individual slices. More systematic boundary metrics, patient-level replication and review of the actual error overlays would be needed before a stronger reliability recommendation.
+For a contour-proposal workflow, both models should remain **human-reviewed**, especially when the predicted prostate is absent, unusually small or inconsistent with clinical expectations. A manager should not choose CAN solely for its small parameter count or treat the mean Dice as a guarantee for individual slices. The completed leakage analysis measures specified class-confusion pixels, not geometric boundary distances or clinical risk; patient-level replication and more systematic boundary metrics would still be needed before a stronger reliability recommendation.
 
-### 7.6 Visualisation Handling and Data Use
+### 7.6 Boundary Leakage Analysis (Complete Held-out Test Set)
+
+#### Method and Definition
+
+To assess anatomical label confusion beyond overall Dice, the saved validation-selected Basic U-Net and CAN checkpoints were evaluated on the **same 540 test MRI slices (three held-out patients)** using `anatomical_analysis.py`. The script compared each predicted **six-class segmentation mask** with its corresponding ground-truth mask and counted two specific errors:
+
+- **Bladder → Prostate:** `((ground_truth == 3) & (prediction == 5)).sum()`
+- **Rectum → Prostate:** `((ground_truth == 4) & (prediction == 5)).sum()`
+
+These counts measure ground-truth pixels belonging to a neighbouring organ that were **incorrectly labelled prostate**, accumulated over all test slices. They are **raw pixel counts**, not surface distances, geometrically verified contour crossings, normalised leakage rates or patient-level averages. A zero count means neither of these two particular label confusions was observed; it does **not** mean the prostate segmentation is accurate.
+
+#### Full Test-set Results
+
+The following values are from the completed `outputs/anatomical_analysis/test_organ_leakage_summary.csv` output, with **540 slices evaluated for each model**:
+
+| Ground-truth class incorrectly predicted as prostate | Basic 2D U-Net | 2D CAN | Comparison |
+|---|---:|---:|---|
+| Bladder (Label 3) → Prostate (Label 5) | 483 | **185** | CAN: 298 fewer pixels (61.7% reduction) |
+| Rectum (Label 4) → Prostate (Label 5) | **366** | 551 | CAN: 185 more pixels (50.5% increase) |
+| **Combined two-class confusion count** | 849 | **736** | CAN: 113 fewer pixels (13.3% reduction) |
+
+CAN reduced bladder-to-prostate confusion substantially, but **increased rectum-to-prostate confusion**. Therefore, its wider in-plane context **did not provide a consistent improvement across the two neighbouring anatomical structures**. The combined count is lower for CAN, but combining the two organ types can conceal the substantial opposite-direction change for the rectum. The result should not be interpreted as proof of generally safer or more accurate boundaries. In particular, the prostate test Dice remained **higher for Basic U-Net (0.8637) than for CAN (0.8557)**.
+
+#### Connection to the Five Selected Failure Cases
+
+The same analysis produced `outputs/anatomical_analysis/test_selected_cases_leakage.csv`, allowing direct comparison with the five cases described in Section 7.2.
+
+| Test case | Basic U-Net bladder → prostate | CAN bladder → prostate | Basic U-Net rectum → prostate | CAN rectum → prostate |
+|---|---:|---:|---:|---:|
+| 74 | 0 | 0 | 0 | 0 |
+| 187 | 0 | 0 | 0 | 0 |
+| 316 | 0 | 0 | 0 | 0 |
+| 483 | 0 | 0 | 0 | 0 |
+| **513** | 0 | 0 | **54** | **23** |
+
+**Case 513** demonstrates why an organ-specific confusion metric and target Dice must be interpreted together. CAN reduced rectum-to-prostate confusion from **54 to 23 pixels**, yet its prostate Dice fell to **0.0000**, versus **0.4299** for Basic U-Net. Specifically, CAN missed all **148** ground-truth prostate pixels and placed **41** false-positive prostate pixels elsewhere, including **23** inside ground-truth rectum. Hence fewer rectum-confusion pixels did **not** imply successful prostate localisation.
+
+For the other four selected cases, both specified organ-confusion counts were zero even when prostate Dice was poor. Their failures were primarily visible in target omission, partial overlap or other incorrect target placement, rather than mislabelling bladder or rectum as prostate. Because these five examples were **deliberately selected**, they are illustrations of distinct failure modes, not a representative sample for estimating error frequency.
+
+#### Interpretation and Limitations
+
+The whole-test-set leakage comparison adds targeted quantitative evidence to the global Dice and five-case visual review: **CAN appears to trade reduced bladder confusion for increased rectum confusion in this experiment**. It does not isolate dilation as the cause of that difference, because U-Net and CAN differ in more than their receptive-field strategy. Further work would require per-patient and organ-size-normalised analyses, explicit physical boundary-distance measures, additional training seeds, and clinical image review. No clinically verified prostate base/apex analysis is claimed.
+
+The aggregate organ-confusion counts are safe to report numerically. The underlying per-slice CSVs include patient identifiers and medical-derived annotations, so they should remain in an authorised environment rather than being uploaded to a public repository without permission.
+
+### 7.7 Visualisation Handling and Data Use
 
 The generated ten-panel images contain patient-level derived medical-image information. Their inclusion in a publicly accessible GitHub README should be checked against the HipMRI data-use agreement and teaching-team guidance. Avoid committing original MRI slices, masks, patient-level overlays or checkpoints without permission. The individual figures can be inspected in the authorised Rangpur environment and, where permitted, included in a non-public assessment export. The numerical analysis above is self-contained without publishing protected image files.
 
@@ -420,6 +466,7 @@ The generated ten-panel images contain patient-level derived medical-image infor
 | `train_can.py` | CAN-specific wrapper for `train.py`, using its own checkpoint and outputs |
 | `evaluate.py` | Architecture-safe loading; full test Dice/IoU and resource profiling |
 | `failure_cases.py` | CAN-vs-baseline slice-level error ranking and visualisation |
+| `anatomical_analysis.py` | Additional full-test-set bladder/rectum-to-prostate class-confusion counts and per-slice records; candidate slice-index outputs are unverified and not reported as base/apex anatomy |
 | `predict.py` | Loads either Basic U-Net or CAN checkpoint, generates and saves segmentation visualisations; CPU inference was validated on test indices 0 and 250 |
 | `improved_modules.py`, `train_improved.py` | Archived exploratory residual-U-Net files; **not the selected report comparison** |
 | `README.md` | Model description, experiments, research limitations and instructions |
@@ -496,7 +543,19 @@ python failure_cases.py \
 
 Expected output directory: `outputs/failure_cases_can/`. Confirm the logs explicitly say both **Basic U-Net and CAN** are loaded. Logs saying `Model loaded: improved` belong to the earlier, superseded residual-U-Net analysis and must **not** be interpreted as CAN output.
 
-### 8.7 Reproducibility Notes
+### 8.7 Boundary Leakage Analysis
+
+The completed organ-label confusion analysis reuses both saved checkpoints, the same held-out test partition, and the model-loading code from `evaluate.py`. Run it **inside a Slurm GPU allocation** from the directory containing `dataset.py`, `evaluate.py`, the checkpoints and `anatomical_analysis.py`:
+
+```bash
+python -u anatomical_analysis.py --split test --device cuda --batch-size 8
+```
+
+The reported numerical totals are in `outputs/anatomical_analysis/test_organ_leakage_summary.csv`. The five selected-case cross-checks are in `test_selected_cases_leakage.csv` and all slice-level counts in `test_all_slices.csv`, under the same output directory. Patient-level CSV files must remain private unless permission is confirmed. The script also creates an exploratory `test_base_apex_CANDIDATES.csv` based on numerical slice-index ends; **those entries are not anatomical base/apex labels and are not part of the reported findings**.
+
+No network parameters are modified and no checkpoint is retrained by this analysis.
+
+### 8.8 Reproducibility Notes
 
 The same dataset partitions, label mapping, preprocessing, loss, optimiser, learning rate, training epochs, batch size and checkpoint selection rule were used for the selected architectures. CAN and U-Net have different depths, spatial activation footprints and numbers of parameters; this is an **architecture comparison**, not a parameter-matched ablation.
 
@@ -508,29 +567,29 @@ One training run per model and one primary test benchmarking pass do not establi
 
 For the present **2D HipMRI annotation prototype**, **Basic U-Net is the preferred accuracy-and-memory baseline**. It achieved higher held-out prostate Dice (**0.8637** vs. **0.8557**) and foreground macro Dice (**0.9182** vs. **0.9162**), with lower measured peak allocated GPU memory (**149.47 MB** vs. **200.15 MB**). CAN met the required Normal Difficulty threshold with **prostate Dice 0.8557** and used substantially fewer trainable parameters (**260,038** vs. **1,942,374**). Its measured inference latency was marginally lower in the single available benchmark, but that difference requires replication before being treated as operationally meaningful.
 
-Accordingly, CAN is a credible compact *parameter-count* alternative, but the completed evidence does **not** justify preferring it solely for higher prostate segmentation accuracy or lower GPU memory. Retain both models for qualitative failure analysis; do not deploy either without independent clinical validation.
+Accordingly, CAN is a credible compact *parameter-count* alternative, but the completed evidence does **not** justify preferring it solely for higher prostate segmentation accuracy or lower GPU memory. The additional 540-slice organ-label confusion evaluation found **fewer bladder-to-prostate errors for CAN (185 vs. 483)** but **more rectum-to-prostate errors (551 vs. 366)**. Retain both models for targeted error analysis; do not deploy either without independent clinical validation.
 
 ### 9.2 Boundary Reliability and Usability
 
 High dataset-aggregated Dice does not exclude local misses, small-structure under-segmentation or potentially important false-positive contours. The proposed human-in-the-loop interface should therefore keep predictions editable and require specialist inspection, especially when the predicted prostate is absent or unusually small or when adjacent structures are poorly separated.
 
-The completed CAN-specific per-slice analysis identified a strong CAN advantage on Cases **74** (0.5644 vs. Basic 0.0000) and **483** (0.5605 vs. 0.0000), but a complete CAN overlap failure on Cases **513** and **187**, where the baseline reached 0.4299 and 0.5417 respectively. Case **316** remained difficult for both models. This contrast supports mandatory manual review of individual contours and shows why whole-dataset Dice does not measure reliability on every slice. The CSV additionally confirms two distinct CAN failure patterns: **Case 513** has 41 misplaced prostate-positive pixels with no true overlap, whereas **Case 187** has no prostate-positive prediction at all. In contrast, CAN recovered 46 and 44 true prostate pixels in Cases **74** and **483**, respectively. The inspected overlays verify the observed overlap and omission patterns, but precise prostate base/apex localisation and clinical boundary safety have not been established.
+The completed CAN-specific per-slice analysis identified a strong CAN advantage on Cases **74** (0.5644 vs. Basic 0.0000) and **483** (0.5605 vs. 0.0000), but a complete CAN overlap failure on Cases **513** and **187**, where the baseline reached 0.4299 and 0.5417 respectively. Case **316** remained difficult for both models. This contrast supports mandatory manual review of individual contours and shows why whole-dataset Dice does not measure reliability on every slice. The CSV additionally confirms two distinct CAN failure patterns: **Case 513** has 41 misplaced prostate-positive pixels with no true overlap, whereas **Case 187** has no prostate-positive prediction at all. In contrast, CAN recovered 46 and 44 true prostate pixels in Cases **74** and **483**, respectively. The completed organ-confusion analysis adds a crucial qualification: in **Case 513**, CAN had fewer rectum-to-prostate misclassified pixels (**23** vs. **54**) despite a much worse prostate Dice (**0.0000** vs. **0.4299**). The inspected overlays verify the observed overlap and omission patterns, but precise prostate base/apex localisation and clinical boundary safety have not been established.
 
 ### 9.3 Limitations and Future Work
 
-The study has several limitations: one training run per architecture, only three independent test patients, 2D-only images without adjacent-slice continuity, no uncertainty quantification, and single-pass GPU inference timing rather than repeated warmed-up benchmarks. The comparison also does not isolate dilation as the sole causal factor because the networks differ in multiple architectural respects, such as pooling, skip paths, channel layout and capacity.
+The study has several limitations: one training run per architecture, only three independent test patients, 2D-only images without adjacent-slice continuity, no uncertainty quantification, and single-pass GPU inference timing rather than repeated warmed-up benchmarks. The additional organ-confusion analysis reports **unnormalised pixel counts** for only two specific error types; it does not assess every boundary error or physical distance, and its results are not independently replicated across random seeds. The comparison also does not isolate dilation as the sole causal factor because the networks differ in multiple architectural respects, such as pooling, skip paths, channel layout and capacity.
 
-Practical next steps include quantifying FP/FN patterns and boundary distances across all target-containing slices rather than only five selected examples; testing Dice-based or class-balanced losses; repeating training across seeds; reporting boundary-sensitive measures such as surface distance where appropriate; and exploring cross-slice or 3D context if resources permit. These are **future proposals**, not experiments performed for this submission.
+Practical next steps include computing per-patient and organ-normalised leakage rates, measuring physical boundary distances across target-containing slices, testing Dice-based or class-balanced losses, repeating training across seeds, and exploring cross-slice or 3D context if resources permit. Anatomically identifying the prostate base and apex would require separately validating the 2D-to-3D slice geometry; this was **not completed or reported** as a finding. These are **future proposals**, not experiments performed for this submission.
 
 ### 9.4 Recommendation to the Project Manager
 
-Continue using **Basic U-Net as the working contour-proposal baseline** under the current compute and evaluation assumptions, while retaining CAN as an informative context-aggregation comparator that meets the assignment target with far fewer learned parameters. Prioritise targeted failure-case review over further architectural complexity, and do not interpret aggregate Dice as proof of clinical safety. The selected, visually inspected CAN failure cases already show both large local benefits and severe regressions; this recommendation should be revisited only after broader patient-level and boundary-specific evaluation.
+Continue using **Basic U-Net as the working contour-proposal baseline** under the current compute and evaluation assumptions, while retaining CAN as an informative context-aggregation comparator that meets the assignment target with far fewer learned parameters. CAN may offer a useful trade-off for **bladder-specific** label confusion, but it was worse on **rectum-specific** confusion and did not improve global prostate Dice. Prioritise targeted failure-case review over further architectural complexity, and do not interpret aggregate Dice or raw leakage counts as proof of clinical safety. The five visualised CAN failure cases already show both large local benefits and severe regressions; this recommendation should be revisited only after broader patient-level and boundary-specific evaluation.
 
 ## 10. Artificial Intelligence Usage Disclosure
 
-ChatGPT was used to assist with understanding COMP3710 CNN/segmentation concepts, drafting and debugging PyTorch architecture and training scripts, modifying the evaluation and failure-case analysis utilities, interpreting logged results and structuring the README. Following tutor feedback, the initial residual-U-Net comparison was replaced by the course-appropriate **Basic 2D U-Net vs. 2D CAN** comparison. AI assistance included an implementation of a compact CAN based on stacked dilated convolutions; it is not represented here as an exact paper reproduction.
+ChatGPT was used to assist with understanding COMP3710 CNN/segmentation concepts, drafting and debugging PyTorch architecture and training scripts, modifying the evaluation, failure-case and anatomical label-confusion analysis utilities, interpreting logged results and structuring the README. Following tutor feedback, the initial residual-U-Net comparison was replaced by the course-appropriate **Basic 2D U-Net vs. 2D CAN** comparison. AI assistance included an implementation of a compact CAN based on stacked dilated convolutions; it is not represented here as an exact paper reproduction.
 
-The author checked functional behaviour through dataset audits, patient-split verification, forward/backward/optimizer smoke tests and actual Rangpur A100 training and held-out test runs. The reported scores, checkpoint epochs, parameter counts and resource measurements were taken from these actual experiment logs, not synthetic examples. The **CAN-specific** failure-case analysis completed on all 540 test slices, and the five selected numerical case results in Section 7 are transcribed from its genuine output log. The selected-case CSV was subsequently checked to verify each model’s false-positive and false-negative pixel counts, and the five patient-level PNG overlays were visually examined for consistency with the numerical findings. This inspection was not a specialist clinical review.
+The author checked functional behaviour through dataset audits, patient-split verification, forward/backward/optimizer smoke tests and actual Rangpur A100 training and held-out test runs. The reported scores, checkpoint epochs, parameter counts and resource measurements were taken from these actual experiment logs, not synthetic examples. The **CAN-specific** failure-case analysis completed on all 540 test slices, and the five selected numerical case results in Section 7 are transcribed from its genuine output log. The selected-case CSV was subsequently checked to verify each model’s false-positive and false-negative pixel counts, and the five patient-level PNG overlays were visually examined for consistency with the numerical findings. The additional bladder/rectum-to-prostate counts and five-case cross-checks in Section 7.6 are transcribed from the actual Rangpur-generated `test_organ_leakage_summary.csv` and `test_selected_cases_leakage.csv` outputs supplied for this report. The MRI overlays and confusion statistics are not a specialist clinical review.
 
 Responsibility for validating the methodology, model source, numerical results, figure provenance, intellectual contribution and compliance with UQ academic integrity and HipMRI data use rules remains with the submitting student.
 
