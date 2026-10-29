@@ -1,7 +1,7 @@
 # Basic 2D U-Net vs. 2D Context Aggregation Network (CAN) for HipMRI Segmentation
 
 **Course:** COMP3710 Pattern Recognition  
-**Student ID:** s4856126  
+**Student ID:** 48561268  
 **Difficulty:** Normal (HipMRI 2D CAN)  
 **Framework:** PyTorch  
 **Dataset:** HipMRI Study  
