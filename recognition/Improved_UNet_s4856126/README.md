@@ -76,6 +76,8 @@ Nearest-neighbour interpolation preserves valid integer class identities in segm
 
 The resulting input MRI tensor has shape `(1, 256, 128)`, while the corresponding multiclass mask has shape `(256, 128)`.
 
+**Mask encoding:** While the project specification mentions one-hot masks, this implementation correctly passes integer class-index masks (`0`–`5`) to PyTorch `CrossEntropyLoss`, with logits shaped `(N, 6, H, W)` and target masks shaped `(N, H, W)`. One-hot conversion is not necessary for this loss; nearest-neighbour resampling preserves class indices.
+
 The network predicts six segmentation classes at the preprocessed input resolution.
 
 ## 3. Baseline: Standard 2D U-Net
@@ -179,6 +181,10 @@ The tested `CAN2D` is implemented in `modules.py`, independently of the `UNet2D`
 | Output | Final 1 × 1 convolution; six raw segmentation logits |
 | Trainable parameters | **260,038** |
 
+![2D CAN architecture and dilation sequence](images/can_architecture.png)
+
+**Figure 2.** Implemented compact 2D CAN architecture: eight dilated convolution blocks with dilation rates `1, 1, 2, 4, 8, 16, 1, 1` and a six-logit output layer. This is a schematic of the implemented model, not an MRI prediction.
+
 For each pixel, a six-channel logit vector is predicted; `argmax` gives the final class. No sigmoid or softmax layer is inserted before the multiclass Cross-Entropy Loss. This is intentionally distinct from the earlier exploratory residual U-Net design, which is **not** the selected comparison for this report.
 
 ### 4.3 Training Configuration and Functional Checks
@@ -224,7 +230,7 @@ Per-class validation Dice at the selected Epoch 8 checkpoint:
 
 The prostate score reached 0.8311 at Epoch 9, but that checkpoint was **not** selected because the predetermined selection criterion was foreground *macro* Dice, which was lower at Epoch 9 (0.8870). This avoids changing the checkpoint rule after examining outcomes.
 
-Training and validation histories were saved as `outputs/can/can_history.csv` and `outputs/can/can_training_curves.png` on Rangpur. A figure may be inserted into the locally exported report only after verifying the corresponding image is present and redistribution is permitted.
+Training and validation histories were saved as `outputs/can/can_history.csv` and `outputs/can/can_training_curves.png` on Rangpur. The CAN training-curve image is not included in this package because its original plot was not among the available files. The observed test comparison is visualised in Figure 3.
 
 ## 5. Feasibility Review
 
@@ -306,6 +312,10 @@ Both saved best-validation checkpoints were evaluated using the same `evaluate.p
 | Trainable parameters | 1,942,374 | **260,038** |
 | Peak allocated CUDA memory | **149.47 MB** | 200.15 MB |
 | Recorded inference time/image | 2.358 ms | 2.239 ms |
+
+![Held-out test prostate Dice and foreground macro Dice for Basic U-Net and CAN](images/test_dice_comparison.png)
+
+**Figure 3.** Test-set Dice comparison on the same 540 held-out MRI slices. Bars show measured dataset-aggregated scores, not averages across patients or independent training runs.
 
 On the test partition, CAN achieved **0.8557 prostate Dice**, exceeding the assignment's **0.75** target, but was lower than the baseline's **0.8637** by approximately **0.0080 Dice (0.80 percentage points)**. The difference in foreground macro Dice was approximately **0.0020** in favour of U-Net. CAN was slightly better for Body and Bones, whereas U-Net was better for Prostate, Bladder and Rectum. Neither model is uniformly superior on every class.
 
@@ -479,7 +489,9 @@ Both commands successfully ran with the real saved checkpoints and produced sepa
 Run **inside a Slurm GPU allocation**:
 
 ```bash
-python failure_cases.py --split test --device cuda --label 5 --top-k 5 --batch-size 8
+python failure_cases.py \
+  --split test --device cuda \
+  --label 5 --top-k 5 --batch-size 8
 ```
 
 Expected output directory: `outputs/failure_cases_can/`. Confirm the logs explicitly say both **Basic U-Net and CAN** are loaded. Logs saying `Model loaded: improved` belong to the earlier, superseded residual-U-Net analysis and must **not** be interpreted as CAN output.
