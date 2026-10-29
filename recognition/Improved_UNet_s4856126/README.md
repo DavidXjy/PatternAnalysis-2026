@@ -1,22 +1,21 @@
-# Improved 2D U-Net for HipMRI Segmentation
+# Basic 2D U-Net vs. 2D Context Aggregation Network (CAN) for HipMRI Segmentation
 
 **Course:** COMP3710 Pattern Recognition  
 **Student ID:** s4856126  
-**Difficulty:** Normal  
+**Difficulty:** Normal (HipMRI 2D CAN)  
 **Framework:** PyTorch  
-**Dataset:** HipMRI Study
+**Dataset:** HipMRI Study  
+**Status:** Training, independent test benchmarking, case-level numerical analysis, and visual inspection of the five selected CAN-vs-baseline failure-case figures completed. The inspected images are not clinical validation and are not authorised for public redistribution.
 
 ## 1. Introduction
 
-Accurate medical image segmentation is important for radiotherapy planning, where clinicians must distinguish target structures from surrounding healthy tissue. In pelvic MRI, anatomical boundaries may be difficult to identify because of low soft-tissue contrast, variation between patients, and small target structures.
+Accurate medical image segmentation can support radiotherapy planning by helping specialists review anatomical contours. Pelvic MRI segmentation remains difficult around low-contrast tissue interfaces, small target regions and variable anatomy. A high global Dice score may conceal a complete miss on an individual slice.
 
-This project investigates whether an Improved 2D U-Net with residual convolutional blocks can provide more accurate anatomical segmentation than a Standard 2D U-Net.
+**Engineering dilemma:** Does adding multi-scale spatial context through dilated convolutions improve prostate segmentation and difficult-boundary reliability compared with a standard 2D U-Net, and is the resulting accuracy/resource trade-off appropriate for a human-in-the-loop annotation tool?
 
-The central research question is whether additional architectural complexity improves segmentation accuracy, particularly around small structures and challenging boundaries, sufficiently to justify its computational cost.
+This project implements a **Basic 2D U-Net baseline** and a **2D Context Aggregation Network (CAN)**, the latter selected from the Normal Difficulty segmentation options. Both models operate on the same HipMRI 2D slices, use the same patient-disjoint train/validation/test partitions and principal training settings, and are assessed on the complete held-out test set. CAN explores wider *in-plane* spatial context without a pooling-based encoder-decoder. It does **not** incorporate adjacent slices or full 3D continuity.
 
-A Standard U-Net is implemented as the baseline. Its performance is compared with a Residual U-Net using the same dataset partitions, training duration, optimizer, learning rate, and evaluation methodology.
-
-The project is intended as an experimental research prototype rather than a clinically validated radiotherapy planning system.
+The primary outcome is not that CAN must outperform the baseline. Instead, the purpose is to measure whether its design provides enough benefit in segmentation accuracy, local error behaviour and resource efficiency to justify its use. Neither network is a clinically validated system, and all predictions would require review by an imaging specialist.
 
 ## 2. Dataset and Preprocessing
 
@@ -30,11 +29,18 @@ The 2D dataset is located at:
 
 Each sample consists of an MRI slice and a corresponding segmentation mask stored in NIfTI format (`.nii.gz`).
 
-The segmentation masks contain six numerical labels, from 0 to 5. These represent the background and annotated anatomical structures.
+The segmentation masks contain six numerical labels, from 0 to 5. The official HipMRI Study supporting file, `BriefDataDescription.txt` (CSIRO), defines the following anatomical mapping:
 
-The official numerical-to-anatomical label mapping was not available in the inspected local dataset metadata. Although visual inspection suggests that raw Label 5 may correspond to the prostate, this has not been authoritatively confirmed.
+| Raw label | Anatomical structure |
+|---|---|
+| 0 | Background |
+| 1 | Body |
+| 2 | Bones |
+| 3 | Bladder |
+| 4 | Rectum |
+| **5** | **Prostate** |
 
-Therefore, results are reported using raw label IDs until the mapping is verified.
+The original 3D semantic mask `B040_Week0_SEMANTIC.nii.gz` was also compared with the preprocessed 2D mask `seg_040_week_0_slice_24.nii.gz`. After selecting the corresponding original slice and accounting for image orientation, foreground label values agreed exactly in this checked example (label agreement = 1.0). This verifies preservation of the numerical labels for the checked pair; it is not an exhaustive verification of every slice. Together with the official class definitions, the evidence supports reporting raw Label 5 as the prostate. The dataset description can be found via the CSIRO HipMRI Study collection (see References).
 
 ### 2.2 Dataset Splitting
 
@@ -54,24 +60,23 @@ The training partition is used to optimize model parameters, the validation part
 
 ### 2.3 Preprocessing
 
-The data-loading and preprocessing pipeline includes:
+The preprocessing pipeline implemented in `dataset.py` includes:
 
 1. Loading MRI slices and segmentation masks using NiBabel.
 2. Matching MRI files with their corresponding segmentation masks.
 3. Checking image-mask alignment, dimensionality, and label validity.
-4. Using the 256 × 128 spatial resolution of the prepared 2D slices.
-5. Applying per-slice Z-score intensity normalisation.
-6. Converting MRI images into floating-point PyTorch tensors.
-7. Converting segmentation masks into integer class labels.
-8. Applying random intensity augmentation to the training partition only.
+4. Standardizing image dimensions to 256 × 128 pixels when necessary.
+5. Using bilinear interpolation for MRI images and nearest-neighbour interpolation for segmentation masks.
+6. Applying per-slice Z-score intensity normalisation.
+7. Converting MRI images into floating-point PyTorch tensors.
+8. Converting segmentation masks into integer class labels.
+9. Applying random intensity augmentation to the training partition only.
 
-MRI intensity normalisation is applied without changing segmentation class identities.
-
-Where image resampling is required for testing or preprocessing, continuous MRI intensities should use bilinear interpolation and categorical masks should use nearest-neighbour interpolation to preserve valid class labels.
+Nearest-neighbour interpolation preserves valid integer class identities in segmentation masks, while bilinear interpolation is appropriate for continuous MRI intensity values.
 
 The resulting input MRI tensor has shape `(1, 256, 128)`, while the corresponding multiclass mask has shape `(256, 128)`.
 
-The network predicts six segmentation classes at the input spatial resolution.
+The network predicts six segmentation classes at the preprocessed input resolution.
 
 ## 3. Baseline: Standard 2D U-Net
 
@@ -148,633 +153,374 @@ The best-performing checkpoint was selected from Epoch 6 and saved as:
 
 These results represent validation performance rather than independent test-set performance.
 
-## 4. Improved 2D U-Net
+## 4. Proposed Architecture: 2D CAN
 
-### 4.1 Motivation
+### 4.1 Motivation and Course Concepts
 
-Although Standard U-Net provides strong baseline performance, segmenting small anatomical structures and ambiguous boundaries remains challenging.
+Standard U-Net increases effective receptive field using successive convolutions and downsampling, then recovers spatial resolution through upsampling and skip connections. While effective, downsampling may discard fine location information that matters for small structures and uncertain boundaries.
 
-An important limitation of deeper convolutional networks is that optimization and gradient propagation may become more difficult as network depth increases.
+**Context Aggregation Network (CAN)** explores a different design: successive convolutions with increasing *dilation rates* gather information from wider in-plane neighbourhoods while retaining the original feature-map height and width. The approach is related to the multi-scale context aggregation method described by Yu and Koltun (2016), referenced in the COMP3710 assessment specification.
 
-The proposed improvement replaces standard convolutional blocks with residual convolutional blocks while preserving the overall U-Net encoder-decoder design.
+A 3 × 3 convolution with dilation `d` has an effective kernel coverage of `(2d + 1) × (2d + 1)` input positions, although only nine kernel sample positions are used. Thus dilation rates 1, 2, 4, 8 and 16 correspond individually to 3 × 3, 5 × 5, 9 × 9, 17 × 17 and 33 × 33 coverage. Stacking dilated layers further grows the network's theoretical receptive field. This increases accessible spatial context; it does not guarantee better boundary prediction.
 
-The aim is to investigate whether residual connections improve feature learning, segmentation accuracy, and boundary reliability.
+### 4.2 Implemented Architecture
 
-### 4.2 Residual Blocks
+The tested `CAN2D` is implemented in `modules.py`, independently of the `UNet2D` baseline. It is a **compact course-project CAN implementation**, not a claim to reproduce every layer or setting of the published model.
 
-A residual block learns a transformation of its input and adds a shortcut connection:
-
-**y = ReLU(F(x) + S(x))**
-
-Here:
-
-- `F(x)` represents the transformation learned by the convolutional layers.
-- `S(x)` represents the residual shortcut.
-- The shortcut is an identity mapping when channel dimensions match.
-- A 1 × 1 convolution is used when input and output channel dimensions differ.
-
-The shortcut allows features and gradients to propagate through the network more directly.
-
-Residual connections can facilitate optimization, but improved segmentation performance must still be demonstrated experimentally.
-
-### 4.3 Improved Architecture
-
-The Improved U-Net is implemented in `improved_modules.py`.
-
-Its main components include:
-
-- Residual convolutional blocks in the encoder and decoder.
-- Max pooling for spatial downsampling.
-- Transposed convolutions for upsampling.
-- Skip connections between corresponding encoder and decoder stages.
-- A final 1 × 1 convolution producing six segmentation logits.
-
-The architecture preserves the main spatial structure of the Standard U-Net, allowing a comparison of ordinary convolutional blocks and residual convolutional blocks.
-
-The implementation successfully passed input-output shape tests, forward propagation tests, backward propagation tests, and optimizer smoke tests.
-
-### 4.4 Training Configuration
-
-The Improved U-Net was trained using:
-
-| Hyperparameter | Value |
+| Component | Implementation |
 |---|---|
-| Epochs | 10 |
+| Input | One MRI channel, 256 × 128 pixels |
+| Context layers | Eight successive 3 × 3 dilated convolution blocks |
+| Dilation sequence | **1, 1, 2, 4, 8, 16, 1, 1** |
+| Hidden width | 64 channels (`base_channels=16`, CAN-specific multiplier ×4) |
+| Each block | `Conv2d` → `BatchNorm2d` → `ReLU` |
+| Spatial size | Preserved by `stride=1` and `padding=dilation` |
+| Pooling/decoder | No pooling, transposed-convolution decoder or U-Net skip paths |
+| Output | Final 1 × 1 convolution; six raw segmentation logits |
+| Trainable parameters | **260,038** |
+
+For each pixel, a six-channel logit vector is predicted; `argmax` gives the final class. No sigmoid or softmax layer is inserted before the multiclass Cross-Entropy Loss. This is intentionally distinct from the earlier exploratory residual U-Net design, which is **not** the selected comparison for this report.
+
+### 4.3 Training Configuration and Functional Checks
+
+CAN was trained on an NVIDIA A100 using the same principal settings as the baseline:
+
+| Hyperparameter | CAN |
+|---|---|
+| Training epochs | 10 |
 | Batch size | 8 |
 | Optimizer | Adam |
 | Learning rate | 0.001 |
-| Loss function | Cross-Entropy Loss |
-| Input channels | 1 |
-| Output classes | 6 |
-| Base channels | 16 |
+| Loss | Multiclass Cross-Entropy |
+| Input/output channels | 1 / 6 |
 | Input resolution | 256 × 128 |
+| Train/validation/test partitions | 11,460 / 660 / 540 slices |
+| Data preparation | Same `dataset.py` as baseline |
+| Checkpoint rule | Highest **validation foreground macro Dice** |
 
-The training and validation partitions and preprocessing pipeline were identical to those used for Standard U-Net.
+CPU smoke tests confirmed a six-class forward pass, finite loss, backward propagation and an Adam optimisation step on a real resized HipMRI slice. Full-resolution CAN training and independent-test inference subsequently ran on Rangpur. The `train_can.py` entry point selects CAN in the shared `train.py` training pipeline; it does not overwrite the pre-existing baseline checkpoint.
 
-The primary experimental difference was the model architecture.
+### 4.4 CAN Validation Results
 
-### 4.5 Improved U-Net Validation Results
-
-The Improved U-Net completed all 10 training epochs successfully on an NVIDIA A100 GPU.
-
-The Slurm training job completed in 16 minutes and 7 seconds.
+The 10-epoch training run completed successfully. The best checkpoint by **validation foreground macro Dice** was saved at **Epoch 8** as `checkpoints/can_best.pt`.
 
 | Metric | Result |
 |---|---:|
-| Best epoch | 10 |
-| Best validation foreground macro Dice | 0.9039 |
-| Final training loss, Epoch 10 | 0.0239 |
+| Best validation epoch | **8** |
+| Best validation foreground macro Dice | **0.9004** |
+| Prostate validation Dice at selected checkpoint (Label 5) | **0.8290** |
+| Final training loss (Epoch 10) | **0.0386** |
 
-Per-class validation Dice at Epoch 10:
+Per-class validation Dice at the selected Epoch 8 checkpoint:
 
-| Raw label | Validation Dice |
-|---|---:|
-| 0 | 0.9949 |
-| 1 | 0.9829 |
-| 2 | 0.9362 |
-| 3 | 0.8773 |
-| 4 | 0.8867 |
-| 5 | 0.8365 |
+| Raw label | Anatomical class | Validation Dice |
+|---|---|---:|
+| 0 | Background | 0.9926 |
+| 1 | Body | 0.9826 |
+| 2 | Bones | 0.9348 |
+| 3 | Bladder | 0.8999 |
+| 4 | Rectum | 0.8554 |
+| **5** | **Prostate** | **0.8290** |
 
-The best checkpoint was saved as:
+The prostate score reached 0.8311 at Epoch 9, but that checkpoint was **not** selected because the predetermined selection criterion was foreground *macro* Dice, which was lower at Epoch 9 (0.8870). This avoids changing the checkpoint rule after examining outcomes.
 
-`checkpoints/improved_unet.pt`
-
-The Improved U-Net achieved a lower final training loss than Standard U-Net, but its best validation foreground macro Dice was slightly lower.
-
-This indicates that adding residual blocks did not produce a clear validation accuracy improvement in the current 10-epoch experiment.
-
-However, one training run per architecture is insufficient to establish whether this difference is statistically reliable.
-
-### 4.6 Improved U-Net Training Curves
-
-![Improved U-Net Training Curves](images/improved_training_curves.png)
-
-**Figure 2.** Training and validation performance of the Improved U-Net over 10 epochs.
-
-The Improved U-Net achieved its highest validation foreground macro Dice of 0.9039 at Epoch 10.
-
-Although training loss decreased steadily, validation Dice fluctuated throughout training. Compared with Standard U-Net, the improved architecture achieved lower final training loss but slightly lower best validation Dice.
-
-These findings suggest that residual connections did not produce a clear generalisation advantage under the current experimental configuration.
+Training and validation histories were saved as `outputs/can/can_history.csv` and `outputs/can/can_training_curves.png` on Rangpur. A figure may be inserted into the locally exported report only after verifying the corresponding image is present and redistribution is permitted.
 
 ## 5. Feasibility Review
 
-**Project:** Improved 2D U-Net for HipMRI Segmentation  
-**Student ID:** s4856126  
+**Project:** Basic 2D U-Net vs. 2D Context Aggregation Network for HipMRI Segmentation  
 **Difficulty:** Normal
 
 ### 5.1 User Need, Scope and Acceptance Criteria
 
-This project investigates automated contour proposals for pelvic MRI to assist medical imaging specialists in prostate radiotherapy planning.
-
-The system is intended for expert review, not autonomous clinical use.
+The intended user is a medical imaging specialist reviewing proposed anatomical contours during prostate radiotherapy planning. The work is an experimental, non-clinical prototype; the contours require expert inspection rather than autonomous use.
 
 The acceptance criteria are:
 
-1. Maintain independent patient-level training, validation and test splits.
-2. Target prostate Dice ≥ 0.75 on the held-out test set after verifying the anatomical label mapping.
-3. Compare Standard U-Net and Improved U-Net using per-class Dice and IoU.
-4. Measure model parameters, peak GPU memory and inference latency.
-5. Investigate 3–5 actual segmentation failures involving small targets and ambiguous boundaries.
+1. Use patient-disjoint training, validation and held-out test partitions.
+2. Achieve **prostate (Label 5) test Dice ≥ 0.75** for the selected 2D CAN model.
+3. Compare the basic baseline and CAN using per-class Dice/IoU on identical test slices.
+4. Report parameters, peak allocated GPU memory and per-image inference latency under comparable conditions.
+5. Inspect **3–5 actual prostate failure cases**, with ground truth, model predictions, FP/FN maps and an actionable engineering interpretation.
 
-### 5.2 Model Choice and Course Concepts
+### 5.2 Model Choice and Relevant Course Concepts
 
-The project uses HipMRI 2D slices available on the UQ Rangpur HPC cluster.
+The baseline is a 2D U-Net with convolutional encoding, spatial downsampling, skip connections and decoding. The selected Normal Difficulty model is **2D CAN**, using stacked dilated convolutions for wider context aggregation at fixed spatial resolution. Relevant concepts include CNN receptive fields, local connectivity, pooling trade-offs, dilated convolution, semantic segmentation, backpropagation, Cross-Entropy and Dice/IoU.
 
-Standard 2D U-Net serves as the baseline, while Improved 2D U-Net introduces residual convolutional blocks into the encoder-decoder architecture.
+**Research question:** Does the additional in-plane context available to 2D CAN yield better prostate boundary behaviour than a standard 2D U-Net, and what are the costs in memory and inference time?
 
-The design draws on CNN feature extraction, U-Net skip connections, residual learning, cross-entropy loss and gradient-based optimization.
+### 5.3 Initial Feasibility and Completion Evidence
 
-The central research question is whether residual connections improve segmentation accuracy enough to justify the additional computational cost.
+The dataset audit found **11,460 training slices from 31 patients, 660 validation slices from 4 patients and 540 test slices from 3 patients**, with disjoint patient identifiers. Images and masks use 256 × 128 resolution and six integer labels. A checked original 3D/processed 2D mask pair preserved foreground class values after orientation adjustment; the official dataset description confirms Label 5 as prostate.
 
-### 5.3 Preliminary Feasibility Evidence
+Both architectures passed forward/backward checks, and completed 10-epoch training runs on an A100. Their checkpoints were selected using validation macro Dice. The held-out comparison has been completed on all 540 test slices, with CAN prostate Dice **0.8557**, meeting the specified ≥ 0.75 threshold. The CAN-vs-baseline failure-case script also completed on the same 540-slice test split and generated five selected case visualisations and per-slice metric files. The numerical case results and the visual review of the five generated overlays are reported in Section 7.
 
-An initial dataset audit confirmed disjoint patient partitions and six numerical mask labels:
+### 5.4 Risks, GPU Budget and Fallback
 
-| Partition | MRI slices | Patients |
-|---|---:|---:|
-| Training | 11,460 | 31 |
-| Validation | 660 | 4 |
-| Test | 540 | 3 |
+Known risks include class imbalance, very small prostate cross-sections, ambiguous interfaces with neighbouring structures, limited patient diversity, overfitting, possible dilation sampling artefacts, and lack of true 3D spatial continuity. Higher-resolution intermediate feature maps can also increase GPU memory even for a smaller-parameter architecture.
 
-The prepared 2D slices use 256 × 128 pixels, with integer mask labels preserved.
+Both models used the same principal 10-epoch training configuration on Rangpur A100 hardware, with a three-hour job allocation for CAN. The fallback is the verified Basic U-Net checkpoint if the context aggregation model does not provide a sufficient accuracy/reliability/resource advantage. Predictions are not intended for clinical deployment.
 
-Data-loading, tensor-shape, and forward/backward smoke tests demonstrated an operational PyTorch training pipeline.
-
-### 5.4 Risks, Computing Budget and Fallback
-
-The main risks include class imbalance, small or ambiguous boundaries, limited patient diversity, overfitting, lack of 3D context, and uncertainty in the numerical-to-anatomical label mapping.
-
-Experiments use NVIDIA A100 GPUs through Rangpur Slurm, with an initial configuration of 10 epochs, batch size 8 and a three-hour training-job allocation.
-
-The original plan was to train both networks, benchmark them on held-out test data, profile computational resources and inspect difficult segmentation cases.
-
-Standard U-Net remains the fallback if residual blocks provide insufficient benefit.
-
-**Practical check-off status:** Tutor consultation pending. Completion must be recorded by the teaching team independently of this written review.
+**Check-off status:** The model comparison was revised following tutor feedback to the tutor-accepted Basic U-Net vs. 2D CAN comparison. The teaching team's formal record of the practical check-off is separate from this README and is **not** asserted here as complete.
 
 ## 6. Experimental Comparison
 
-### 6.1 Validation Performance
+### 6.1 Validation Performance and Model Selection
 
-Both models were trained for 10 epochs using the same dataset partitions and principal training hyperparameters.
+Each model completed one 10-epoch training run. The predefined model-selection rule was maximum validation foreground macro Dice, excluding background Label 0.
 
-| Metric | Standard U-Net | Improved U-Net |
+| Metric | Basic 2D U-Net | 2D CAN |
 |---|---:|---:|
 | Training epochs | 10 | 10 |
-| Best validation epoch | 6 | 10 |
-| Best validation foreground macro Dice | **0.9109** | 0.9039 |
-| Label 5 validation Dice | **0.8440** | 0.8365 |
-| Final training loss | 0.0265 | **0.0239** |
-| Trainable parameters | 1,942,374 | 2,030,902 |
+| Best validation epoch | 6 | 8 |
+| Best validation foreground macro Dice | **0.9109** | 0.9004 |
+| Prostate validation Dice at selected checkpoint | **0.8440** | 0.8290 |
+| Final training loss (Epoch 10) | **0.0265** | 0.0386 |
+| Trainable parameters | 1,942,374 | **260,038** |
 
-The Standard U-Net achieved approximately 0.0070 higher validation foreground macro Dice.
+The baseline exceeded CAN in validation macro Dice by **0.0105**, and in prostate Dice at each model's selected checkpoint by **0.0150**. These are outcomes of single training runs, not estimates of statistically significant differences across random seeds.
 
-For raw Label 5, Standard U-Net achieved approximately 0.0075 higher Dice.
+### 6.2 Independent Held-out Test Evaluation
 
-Although Improved U-Net produced lower training loss, it did not outperform the baseline on validation accuracy.
-
-This suggests that additional residual structure did not provide a measurable validation accuracy advantage in the current experiment.
-
-Possible explanations include differences in optimization dynamics, limited training diversity, architecture-specific inductive biases and ordinary random variation between training runs.
-
-The independent test results and case-specific errors are analysed below.
-
-### 6.2 Independent Test Set Evaluation
-
-Both selected checkpoints were evaluated on the complete held-out test partition containing **540 MRI slices from three patients**.
-
-The same `evaluate.py` script, GPU device and batch size of 8 were used for both models.
-
-Each class Dice and Intersection-over-Union (IoU) was computed by accumulating pixel-level confusion counts across the full test partition, rather than averaging per-slice Dice scores.
+Both saved best-validation checkpoints were evaluated using the same `evaluate.py` implementation on the **complete 540-slice test partition (3 patients)**, with batch size 8 and NVIDIA A100 hardware. Metrics were computed by aggregating pixel-level confusion counts across the dataset: for each class, `Dice = 2TP / (2TP + FP + FN)` and `IoU = TP / (TP + FP + FN)`. They are **dataset-aggregated class scores**, not averages of per-slice Dice. The foreground macro Dice is the mean of Dice scores for Labels 1–5.
 
 #### Per-class Dice and IoU
 
-| Raw label | Standard Dice | Improved Dice | Standard IoU | Improved IoU |
+| Label and anatomy | Basic Dice | CAN Dice | Basic IoU | CAN IoU |
 |---|---:|---:|---:|---:|
-| 0 | 0.9969 | 0.9970 | 0.9939 | 0.9940 |
-| 1 | 0.9844 | 0.9845 | 0.9693 | 0.9694 |
-| 2 | 0.9353 | 0.9353 | 0.8784 | 0.8785 |
-| 3 | **0.9654** | 0.9640 | **0.9331** | 0.9304 |
-| 4 | **0.8424** | 0.8358 | **0.7277** | 0.7180 |
-| 5 | **0.8637** | 0.8511 | **0.7600** | 0.7408 |
+| 0 Background | 0.9969 | 0.9963 | 0.9939 | 0.9926 |
+| 1 Body | 0.9844 | **0.9847** | 0.9693 | **0.9698** |
+| 2 Bones | 0.9353 | **0.9369** | 0.8784 | **0.8813** |
+| 3 Bladder | **0.9654** | 0.9638 | **0.9331** | 0.9301 |
+| 4 Rectum | **0.8424** | 0.8401 | **0.7277** | 0.7243 |
+| **5 Prostate** | **0.8637** | 0.8557 | **0.7600** | 0.7478 |
 
-#### Overall Performance and Resource Comparison
+#### Main Results and Computational Profile
 
-| Metric | Standard U-Net | Improved U-Net |
+| Metric | Basic 2D U-Net | 2D CAN |
 |---|---:|---:|
-| Test mean foreground Dice | **0.9182** | 0.9141 |
-| Test Label 5 Dice | **0.8637** | 0.8511 |
-| Test Label 5 IoU | **0.7600** | 0.7408 |
-| Inference time per image | 2.455 ms | 1.376 ms |
-| Peak allocated GPU memory | **149.47 MB** | 165.82 MB |
-| Trainable parameters | **1,942,374** | 2,030,902 |
+| Test foreground macro Dice | **0.9182** | 0.9162 |
+| Test prostate Dice (Label 5) | **0.8637** | 0.8557 |
+| Test prostate IoU (Label 5) | **0.7600** | 0.7478 |
+| Prostate Dice ≥ 0.75 | Yes | **Yes** |
+| Trainable parameters | 1,942,374 | **260,038** |
+| Peak allocated CUDA memory | **149.47 MB** | 200.15 MB |
+| Recorded inference time/image | 2.358 ms | 2.239 ms |
 
-On the independent test set, Standard U-Net achieved a mean foreground Dice of **0.9182**, compared with **0.9141** for Improved U-Net.
+On the test partition, CAN achieved **0.8557 prostate Dice**, exceeding the assignment's **0.75** target, but was lower than the baseline's **0.8637** by approximately **0.0080 Dice (0.80 percentage points)**. The difference in foreground macro Dice was approximately **0.0020** in favour of U-Net. CAN was slightly better for Body and Bones, whereas U-Net was better for Prostate, Bladder and Rectum. Neither model is uniformly superior on every class.
 
-The difference was approximately **0.0041** in favour of the baseline.
+The observed results do not support a claim that CAN improved *global* prostate Dice in this run. Section 7 demonstrates both improvements and regressions on selected individual slices; however, five deliberately selected cases cannot establish overall boundary reliability or clinical usability.
 
-For raw Label 5, Standard U-Net achieved Dice **0.8637** and IoU **0.7600**, while Improved U-Net achieved Dice **0.8511** and IoU **0.7408**.
+The evaluation produced:
 
-This represents a Dice advantage of approximately **0.0126** for Standard U-Net on raw Label 5.
+- `outputs/evaluation/baseline_test_cuda.json` and `.csv`
+- `outputs/evaluation/can_test_cuda.json` and `.csv`
 
-Both models achieved raw Label 5 Dice above 0.75. However, this result must not be described as confirmed prostate Dice until the numerical-to-anatomical label mapping is verified.
+These are numerical result files on Rangpur; source code, not the confidential medical dataset or patient-level images, should be committed to the public repository unless redistribution permission has been confirmed.
 
-The official target of Dice ≥ 0.75 refers specifically to the prostate label.
+### 6.3 Resource Efficiency and Trade-offs
 
-The test metric aggregation differs from the reporting procedure used in some training experiments. Therefore, comparisons between architectures use results produced by the same complete test evaluation script.
+The CAN implementation has **260,038** trainable parameters compared with **1,942,374** for Basic U-Net, a reduction of approximately **86.6%**. The parameter count measures the number of learned weights and biases, not the memory consumption of all intermediate activations.
 
-Only three patients are represented in the test partition. These findings should not be interpreted as evidence of general clinical performance.
+Despite this reduction, CAN's observed peak **allocated** CUDA memory was **200.15 MB**, versus **149.47 MB** for the baseline, an increase of approximately **33.9%**. The full-resolution dilated convolution stack retains comparatively large intermediate feature maps, which can explain how an architecture with fewer parameters consumes more allocated memory. The memory metric comes from PyTorch's CUDA allocator, not total physical VRAM reported by `nvidia-smi`.
 
-The evaluation produced the following files:
+In the same evaluation workflow, CAN's recorded time was **2.239 ms/image** versus **2.358 ms/image** for Basic U-Net, approximately **0.119 ms/image** lower. The timer included forward inference and `argmax`, with GPU synchronization, but excluded dataset loading; there was no separate repeated, warmed-up latency study. The small apparent speed advantage therefore should **not** be interpreted as a guaranteed deployment improvement.
 
-- `outputs/evaluation/baseline_test_cuda.json`
-- `outputs/evaluation/baseline_test_cuda.csv`
-- `outputs/evaluation/improved_test_cuda.json`
-- `outputs/evaluation/improved_test_cuda.csv`
-
-### 6.3 Resource Efficiency
-
-Computational efficiency is an important consideration for deploying segmentation models in practical annotation workflows.
-
-Standard U-Net contains **1,942,374 trainable parameters**, while Improved U-Net contains **2,030,902 parameters**.
-
-The residual architecture therefore adds **88,528 parameters**, representing a **4.56% increase** relative to the baseline.
-
-The measured peak allocated GPU memory was:
-
-- Standard U-Net: **149.47 MB**
-- Improved U-Net: **165.82 MB**
-
-This represents an approximately **10.94% increase** in peak allocated GPU memory for the residual architecture.
-
-The recorded inference times were:
-
-- Standard U-Net: **2.455 ms per image**
-- Improved U-Net: **1.376 ms per image**
-
-The Improved U-Net recorded a shorter inference time in this evaluation. However, these values were obtained from a single evaluation procedure rather than a repeated, warmed-up latency benchmark.
-
-Therefore, the apparent speed advantage should be interpreted cautiously and should not be treated as evidence of consistently faster inference.
-
-Peak allocated CUDA memory also measures allocated tensor memory rather than total physical GPU memory consumption.
-
-Overall, Improved U-Net required more parameters and allocated GPU memory but did not achieve higher test foreground Dice.
-
-This demonstrates that greater architectural complexity does not necessarily produce better segmentation accuracy or a more favourable engineering trade-off.
+This yields an instructive result: **parameter efficiency, allocated GPU memory and segmentation accuracy are distinct quantities**. A more compact model is not automatically more accurate, and it is not necessarily more memory-efficient during inference.
 
 ## 7. Qualitative Failure Case Analysis
 
 ### 7.1 Evaluation Method
 
-Global Dice scores can hide important local errors, particularly in small structures and uncertain anatomical boundaries.
+The revised `failure_cases.py` loaded the validation-selected **Basic U-Net** (`checkpoints/baseline_unet.pt`, Epoch 6) and **CAN** (`checkpoints/can_best.pt`, Epoch 8) checkpoints and compared predictions on all **540 held-out test slices**. Case ranking considered only slices with a non-empty ground-truth prostate region (raw Label 5).
 
-The `failure_cases.py` script evaluated both models on the same held-out test slices and identified five informative failure cases for raw Label 5.
+For each eligible slice, the script computed prostate Dice and recorded the number of false-positive (FP) and false-negative (FN) pixels for both networks. It selected five **distinct, deliberately challenging** cases covering CAN's lowest Dice, its largest improvement, its largest regression, the baseline's lowest Dice and a relatively larger difficult target. Selection was targeted rather than random, so these five cases **cannot estimate how often** the observed failures occur in the test population.
 
-For each selected image, the script generated an eight-panel comparison containing:
+The script generated ten-panel figures containing the input MRI, prostate ground truth, the two binary prostate predictions, two contour comparisons and separate FP/FN overlays for each model. In contour views, red marks ground truth and green marks prediction; in error views, red is FP and blue is FN. The selected case values below come from the **actual completed CAN-vs-baseline job log**, not the earlier exploratory Residual U-Net experiment. Individual-slice Dice in this section must not be confused with the dataset-aggregated class Dice in Section 6.
 
-1. Original MRI image.
-2. Ground-truth raw Label 5 mask.
-3. Standard U-Net prediction overlay.
-4. Improved U-Net prediction overlay.
-5. Standard U-Net false-positive region.
-6. Standard U-Net false-negative region.
-7. Improved U-Net false-positive region.
-8. Improved U-Net false-negative region.
+### 7.2 Selected Test Cases and Pixel-Level Errors
 
-Ground-truth contours are displayed in red and prediction contours in green.
+The metrics below were obtained from `outputs/failure_cases_can/test_selected_cases.csv`, generated by the completed **Basic U-Net vs CAN** job. The two models were compared against identical ground-truth masks. **FP** is a predicted prostate pixel outside ground truth; **FN** is a ground-truth prostate pixel missed by the prediction; **TP** is their overlapping prostate pixel count. These are integer pixel counts for each individual test slice, not dataset-wide averages.
 
-False-positive pixels are highlighted in red, while false-negative pixels are highlighted in blue.
+| Test index | Ground-truth pixels | Basic Dice | CAN Dice | Basic FP / FN | CAN FP / FN | CAN − Basic Dice |
+|---|---:|---:|---:|---:|---:|---:|
+| 513 | 148 | **0.4299** | 0.0000 | 104 / 79 | 41 / 148 | −0.4299 |
+| 74 | 112 | 0.0000 | **0.5644** | 0 / 112 | 5 / 66 | +0.5644 |
+| 187 | 98 | **0.5417** | 0.0000 | 7 / 59 | 0 / 98 | −0.5417 |
+| 483 | 105 | 0.0000 | **0.5605** | 0 / 105 | 8 / 61 | +0.5605 |
+| 316 | 104 | 0.1091 | **0.3089** | 0 / 98 | 0 / 85 | +0.1999 |
 
-The investigation focuses on raw Label 5 because its precise anatomical correspondence has not yet been authoritatively verified.
+Dice differences come from the script's full-precision scores. For any given model and slice, `TP = ground-truth prostate pixels − FN`.
 
-### 7.2 Case-by-Case Results
+**Case 513: Complete overlap failure with misplaced positive predictions.** The ground truth has **148 prostate pixels**. Basic U-Net correctly overlaps **69** of them (79 FN) but also predicts **104 FP**, giving Dice **0.4299**. CAN overlaps **0** real prostate pixels (**148 FN**) and predicts **41 FP** elsewhere, giving Dice **0.0000**. Thus CAN did produce some prostate predictions, but **none overlapped the reference**. This is a particularly concerning type of local regression that overall Dice hides.
 
-The following five cases were selected from actual test-set predictions:
+**Case 74: CAN partially recovers a prostate missed by the baseline.** Basic U-Net produces **no prostate-positive pixels** (0 FP, **112 FN**, Dice **0.0000**). CAN correctly overlaps **46** of the 112 reference pixels, with **66 FN** and only **5 FP**, resulting in Dice **0.5644**. CAN improves overlap substantially on this particular slice, although some of the target remains missed.
 
-| Test Index | GT Label 5 Pixels | Standard Dice | Improved Dice | Main Finding |
-|---|---:|---:|---:|---|
-| 8 | 16 | 0.0000 | 0.0000 | Both models miss a small target |
-| 73 | 42 | 0.0000 | 0.0000 | Both models miss the target |
-| 130 | 5 | 0.0000 | 0.0000 | Extremely small target is missed |
-| 250 | 171 | **0.8518** | 0.0568 | Improved U-Net suffers severe under-segmentation |
-| 335 | 108 | 0.2581 | **0.7219** | Improved U-Net substantially improves the prediction |
+**Case 187: CAN entirely omits the prostate prediction.** Basic U-Net has **39 TP**, **59 FN** and **7 FP**, yielding Dice **0.5417**. CAN produces **zero prostate-positive pixels** (0 FP, **98 FN**), giving Dice **0.0000**. Unlike Case 513, this case represents complete absence of a predicted prostate region, not a predicted region in the wrong place.
 
-#### Case 8: Small Target Missed by Both Models
+**Case 483: CAN recovers part of a target missed by Basic U-Net.** The ground truth includes **105 prostate pixels**. Basic U-Net predicts no positive prostate pixels (0 FP, **105 FN**, Dice **0.0000**). CAN has **44 TP**, **61 FN** and **8 FP**, reaching Dice **0.5605**. This provides a second example of substantial improvement on a difficult slice, without implying a general advantage in global Dice.
 
-**Ground-truth Label 5 pixels:** 16  
-**Standard U-Net Dice:** 0.0000  
-**Improved U-Net Dice:** 0.0000
+**Case 316: Both models severely under-segment the target.** The reference has **104 prostate pixels**. Basic U-Net correctly identifies only **6** (98 FN, 0 FP), giving Dice **0.1091**. CAN identifies **19** (85 FN, 0 FP), improving Dice to **0.3089**, but still misses most of the target. Both models primarily fail through *false negatives* here rather than false positives.
 
-The ground-truth mask contains a very small labelled region located near a prominent image structure.
+### 7.3 Visual Review of the Five Error Maps
 
-Neither model produced a corresponding successful segmentation of this region.
+The ten-panel figures were examined alongside the case-level CSV. The visual panels agree with the numerical findings:
 
-The error maps show false-negative pixels in the ground-truth area, indicating that the annotated structure was omitted.
+- **Case 513:** The Basic U-Net contour partially overlaps the red reference contour, whereas the CAN green contour is displaced and does not overlap it. The CAN FP panel shows erroneous predictions away from the reference; its FN panel covers the entire target. This is a **mislocalised prediction**, not a completely empty CAN mask.
+- **Case 74:** The Basic U-Net has no prostate prediction and the entire target appears as FN. CAN places a partial contour over the annotated region, reducing the blue FN area; some of the region is still missed.
+- **Case 187:** The Basic U-Net produces a smaller overlapping contour. CAN has an empty prostate prediction, reflected by an empty CAN FP panel and an FN overlay covering the complete reference region.
+- **Case 483:** The Basic U-Net has an empty prostate mask, while CAN recovers part of the target near the corresponding annotated region. Its FP region is small and the remaining FN region is clearly visible.
+- **Case 316:** Both predictions are substantially smaller than the ground-truth region. CAN overlaps a larger part than Basic U-Net, but the dominant visual error for both is under-segmentation (FN).
 
-This is an example of a complete missed-detection failure for both architectures.
+These are selected *slice-level* observations, not a test of how often each failure pattern occurs across all patients. The images do not alone establish which physical slice corresponds to a prostate base or apex, and they do not support claims about clinical consequences.
 
-A plausible contributing factor is the extremely small target size relative to the full 256 × 128 input image.
+### 7.4 Generated Figures and Data Handling
 
-#### Case 73: Recurring Small-Structure Failure
+The following ten-panel figures were generated on Rangpur, with MRI, ground truth, predictions, contour overlays and FP/FN masks:
 
-**Ground-truth Label 5 pixels:** 42  
-**Standard U-Net Dice:** 0.0000  
-**Improved U-Net Dice:** 0.0000
+- `outputs/failure_cases_can/test_case_0513_baseline_vs_can.png`
+- `outputs/failure_cases_can/test_case_0074_baseline_vs_can.png`
+- `outputs/failure_cases_can/test_case_0187_baseline_vs_can.png`
+- `outputs/failure_cases_can/test_case_0483_baseline_vs_can.png`
+- `outputs/failure_cases_can/test_case_0316_baseline_vs_can.png`
 
-Both models failed to segment the annotated Label 5 region.
+The complete selection data are in `outputs/failure_cases_can/test_selected_cases.csv`; the script also generated `test_all_target_slices.csv` for all test slices with ground-truth prostate pixels. The numerical FP/FN counts were checked against the **actual CSV**, and all five corresponding PNG overlays were visually inspected. The displayed binary masks, contour overlays and FP/FN regions were consistent with the recorded case-level results. Visual inspection here verifies the figures against the logged predictions; it does **not** identify prostate base/apex anatomy, quantify distance to other organs, establish clinical outcomes, or constitute independent clinical validation.
 
-Although the target is larger than in Case 8, it still occupies a very small fraction of the total image.
+### 7.5 Cross-Case Interpretation and Engineering Implications
 
-The false-negative overlays show that neither architecture recovered the expected region.
+The selected cases provide direct evidence of **heterogeneous local behaviour**. CAN showed large improvements in Cases **74** and **483**, but complete target-overlap failure in Cases **513** and **187**; both models had low Dice in Case **316**. Importantly, the ground-truth target sizes range from **98 to 148 pixels**, so these failures are not restricted to vanishingly small, five-pixel targets.
 
-This demonstrates that small-object detection remains a recurring weakness of both models rather than an isolated failure.
+Together with the full test-set metrics, the evidence supports a qualified conclusion: increasing in-plane context through CAN **did not improve global prostate Dice** in this experiment, but the selected slices reveal benefits and risks obscured by aggregate scores. This does **not** establish the causal contribution of dilation alone, because CAN and U-Net differ in several architectural details. It also does not show whether either model is clinically safe at the prostate base/apex or interfaces with nearby organs.
 
-The result also suggests that simply introducing residual connections is insufficient to eliminate small-target segmentation errors.
+For a contour-proposal workflow, both models should remain **human-reviewed**, especially when the predicted prostate is absent, unusually small or inconsistent with clinical expectations. A manager should not choose CAN solely for its small parameter count or treat the mean Dice as a guarantee for individual slices. More systematic boundary metrics, patient-level replication and review of the actual error overlays would be needed before a stronger reliability recommendation.
 
-#### Case 130: Extremely Small Target
+### 7.6 Visualisation Handling and Data Use
 
-**Ground-truth Label 5 pixels:** 5  
-**Standard U-Net Dice:** 0.0000  
-**Improved U-Net Dice:** 0.0000
-
-This case contains an extremely small ground-truth region consisting of only five pixels.
-
-Neither model produced an overlapping prediction.
-
-This type of structure may be particularly difficult to recognise because of spatial information loss during encoder downsampling, severe class imbalance, and uncertainty around the precise annotated boundary.
-
-These factors are plausible explanations, but the exact causal mechanism cannot be determined from one image alone.
-
-The case highlights a limitation of slice-based segmentation when the target occupies only a tiny fraction of the input.
-
-#### Case 250: Severe Under-Segmentation by Improved U-Net
-
-**Ground-truth Label 5 pixels:** 171  
-**Standard U-Net Dice:** 0.8518  
-**Improved U-Net Dice:** 0.0568
-
-This is one of the most important cases in the experiment.
-
-Standard U-Net successfully identified most of the annotated target region, with its prediction boundary closely following the ground-truth contour.
-
-In contrast, Improved U-Net predicted only a small part of the target.
-
-Its false-negative overlay shows that a substantial portion of the annotated region was omitted.
-
-This represents severe under-segmentation and a major decrease in local Dice.
-
-The difference between the models is approximately **0.7949 Dice** in favour of Standard U-Net.
-
-Importantly, this target contains 171 pixels and is not an extremely small five-pixel structure.
-
-Therefore, the failure cannot be explained solely by the target being exceptionally small.
-
-The case demonstrates that a more complex architecture may produce unstable local predictions even when its overall segmentation performance remains relatively high.
-
-#### Case 335: Improved U-Net Successfully Recovers More of the Target
-
-**Ground-truth Label 5 pixels:** 108  
-**Standard U-Net Dice:** 0.2581  
-**Improved U-Net Dice:** 0.7219
-
-This case shows the opposite pattern to Case 250.
-
-Standard U-Net identified only a limited part of the ground-truth target, resulting in a low Dice score of 0.2581.
-
-Improved U-Net produced a segmentation that overlapped substantially more of the annotated region.
-
-The false-negative area was reduced, and Dice increased to 0.7219.
-
-The improvement was approximately **0.4638 Dice**.
-
-This provides evidence that residual connections can be beneficial for particular difficult slices.
-
-However, the improvement was not consistent across all cases and did not translate into better overall test Dice.
-
-### 7.3 Cross-Case Interpretation
-
-The five cases demonstrate three important findings.
-
-**First, both models struggle with extremely small anatomical regions.**
-
-Cases 8, 73 and 130 all produced Dice scores of zero for both architectures.
-
-This indicates a recurring failure mode involving small or weakly represented target structures.
-
-**Second, residual connections do not guarantee greater boundary reliability.**
-
-Case 335 demonstrated a substantial improvement from the residual architecture, whereas Case 250 demonstrated a severe deterioration.
-
-The same architectural modification can therefore produce very different local effects across images.
-
-**Third, high average Dice can conceal serious segmentation failures.**
-
-Both architectures achieved test foreground macro Dice above 0.91, yet several selected slices were segmented poorly or completely missed.
-
-These cases were deliberately selected for difficult behaviour and are not representative of the failure frequency across the entire test partition.
-
-They provide qualitative evidence about failure modes rather than an unbiased estimate of general model reliability.
-
-This directly addresses the project's engineering dilemma: improving architectural complexity does not automatically ensure safer or more reliable anatomical boundaries.
-
-### 7.4 Practical Implications and Future Improvements
-
-For a human-in-the-loop anatomical contouring system, automatically generated masks should be treated as editable proposals rather than final clinical annotations.
-
-Particular attention should be given to slices containing:
-
-- Very small labelled regions.
-- Missing target predictions.
-- Large false-negative areas.
-- Ambiguous anatomical boundaries.
-- Strong disagreements between different model predictions.
-
-Potential future improvements include class-balanced loss functions, Dice-based training objectives, stronger sampling of small targets, and architectures that incorporate information across adjacent MRI slices.
-
-These are proposed improvements rather than additional experiments performed in this submission.
-
-The five complete eight-panel comparison figures and the corresponding `test_case_metrics.csv` were generated from real test data.
-
-Patient-level MRI figures are retained in private research outputs pending confirmation of public redistribution permissions. They are not included in the public GitHub repository at this stage.
+The generated ten-panel images contain patient-level derived medical-image information. Their inclusion in a publicly accessible GitHub README should be checked against the HipMRI data-use agreement and teaching-team guidance. Avoid committing original MRI slices, masks, patient-level overlays or checkpoints without permission. The individual figures can be inspected in the authorised Rangpur environment and, where permitted, included in a non-public assessment export. The numerical analysis above is self-contained without publishing protected image files.
 
 ## 8. Usage and Reproducibility
 
 ### 8.1 Project Structure
 
-| File | Purpose |
+| File or output | Purpose |
 |---|---|
-| `dataset.py` | Data loading, preprocessing, augmentation and split verification |
-| `modules.py` | Standard U-Net architecture |
-| `improved_modules.py` | Improved Residual U-Net architecture |
-| `train.py` | Baseline training and validation |
-| `train_improved.py` | Improved-model training using the shared pipeline |
-| `predict.py` | Segmentation inference and visualisation |
-| `evaluate.py` | Dataset-level Dice, IoU and resource evaluation |
-| `failure_cases.py` | Failure-case selection and visual analysis |
-| `README.md` | Project documentation and experimental report |
+| `dataset.py` | NIfTI loading, preprocessing, augmentation and split checks |
+| `modules.py` | Both `UNet2D` baseline and `CAN2D` architectures |
+| `train.py` | Shared training, validation, model selection and evaluation entry point |
+| `train_can.py` | CAN-specific wrapper for `train.py`, using its own checkpoint and outputs |
+| `evaluate.py` | Architecture-safe loading; full test Dice/IoU and resource profiling |
+| `failure_cases.py` | CAN-vs-baseline slice-level error ranking and visualisation |
+| `predict.py` | Loads either Basic U-Net or CAN checkpoint, generates and saves segmentation visualisations; CPU inference was validated on test indices 0 and 250 |
+| `improved_modules.py`, `train_improved.py` | Archived exploratory residual-U-Net files; **not the selected report comparison** |
+| `README.md` | Model description, experiments, research limitations and instructions |
+| `checkpoints/baseline_unet.pt` | Saved baseline best-validation checkpoint (Rangpur, not public GitHub) |
+| `checkpoints/can_best.pt` | Saved CAN best-validation checkpoint (Rangpur, not public GitHub) |
 
 ### 8.2 Software Environment
 
-The experiments were conducted using the University of Queensland Rangpur HPC environment.
+The experiments used UQ Rangpur NVIDIA A100 hardware. Previously recorded environment versions were Python 3.11.13, PyTorch 2.14.1+cu130, NumPy 2.4.6, NiBabel 5.4.2 and Matplotlib 3.11.2. The dataset lives on Rangpur at `/home/groups/comp3710/HipMRI_Study_open/keras_slices_data/` and is **not** included in the source repository.
 
-The verified software versions are:
+Training, test evaluation and failure-case generation should be performed inside a Slurm A100 GPU allocation, not on the login node. A CPU smoke test can be performed on the login node with the explicitly small sample configuration.
 
-| Software | Version |
-|---|---|
-| Python | 3.11.13 |
-| PyTorch | 2.14.1+cu130 |
-| NumPy | 2.4.6 |
-| NiBabel | 5.4.2 |
-| Matplotlib | 3.11.2 |
+### 8.3 Model Checks and Training
 
-GPU training and evaluation were performed using NVIDIA A100 hardware.
+Run basic architecture forward/backward checks (small synthetic data):
 
-The original dataset is stored on Rangpur and is not included in the repository.
+```bash
+python modules.py
+```
 
-### 8.3 Training
+Run the CAN smoke test on one real but resized HipMRI slice:
 
-The Standard U-Net can be trained using:
+```bash
+python train_can.py --smoke-test --device cpu
+```
 
-`python train.py --epochs 10 --batch-size 8 --device cuda --checkpoint checkpoints/baseline_unet.pt --output-dir outputs/baseline_10epochs`
+Representative commands **inside an allocated GPU job**:
 
-The Improved U-Net can be trained using:
+```bash
+# Basic U-Net baseline (only if retraining is necessary)
+python train.py --model unet --epochs 10 --batch-size 8 --lr 0.001 \
+  --base-channels 16 --device cuda \
+  --checkpoint checkpoints/baseline_unet.pt \
+  --output-dir outputs/baseline_10epochs
 
-`python train_improved.py --epochs 10 --batch-size 8 --device cuda --checkpoint checkpoints/improved_unet.pt --output-dir outputs/improved_10epochs`
+# CAN (the actual selected Normal Difficulty model)
+python train_can.py --epochs 10 --batch-size 8 --lr 0.001 \
+  --base-channels 16 --device cuda
+```
 
-These GPU commands should be executed within an appropriately allocated Rangpur GPU job rather than directly on the login node.
+Training is already complete for the results in this document. **Do not retrain or overwrite saved checkpoints just to reproduce the result tables.** The trained CAN checkpoint was saved to `checkpoints/can_best.pt`, with history and plots in `outputs/can/`.
 
-The training scripts save model checkpoints and training histories.
+### 8.4 Independent Test Evaluation
 
-### 8.4 Prediction
+Representative commands inside an allocated GPU job, using the same batch size for each model:
 
-Example baseline inference:
+```bash
+python evaluate.py --model baseline --split test --device cuda --batch-size 8
+python evaluate.py --model can --split test --device cuda --batch-size 8
+```
 
-`python predict.py --model baseline --index 0`
+Outputs are saved in `outputs/evaluation/` as model-specific JSON and CSV files. A lightweight **non-representative** functionality check can be run on two validation slices, e.g. `python evaluate.py --model can --split validate --device cpu --max-samples 2`. Never report partial-sample results as full test accuracy. The independent test set must not be used to tune hyperparameters or change the model-selection rule.
 
-Example improved-model inference:
+### 8.5 Prediction Examples
 
-`python predict.py --model improved --index 0`
+The selected checkpoints can be loaded for CPU image prediction without a GPU allocation:
 
-The prediction script loads the selected trained checkpoint, generates a segmentation prediction and saves a visual comparison.
+```bash
+python predict.py --model can --split test --index 250 --device cpu
+python predict.py --model baseline --split test --index 250 --device cpu
+```
 
-### 8.5 Evaluation
+Both commands successfully ran with the real saved checkpoints and produced separate PNG visualisations in `outputs/predictions/`. Test index 250 includes prostate pixels in its ground truth; this prediction check is not a substitute for the complete evaluation.
 
-A lightweight evaluation functionality check can be run using:
+### 8.6 Failure Case Analysis
 
-`python evaluate.py --model baseline --split validate --device cpu --max-samples 2`
+Run **inside a Slurm GPU allocation**:
 
-This command evaluates only two validation slices and does not produce a representative accuracy benchmark.
+```bash
+python failure_cases.py --split test --device cuda --label 5 --top-k 5 --batch-size 8
+```
 
-Full test-set evaluation can be performed using:
+Expected output directory: `outputs/failure_cases_can/`. Confirm the logs explicitly say both **Basic U-Net and CAN** are loaded. Logs saying `Model loaded: improved` belong to the earlier, superseded residual-U-Net analysis and must **not** be interpreted as CAN output.
 
-`python evaluate.py --model baseline --split test --device cuda --batch-size 8`
+### 8.7 Reproducibility Notes
 
-`python evaluate.py --model improved --split test --device cuda --batch-size 8`
+The same dataset partitions, label mapping, preprocessing, loss, optimiser, learning rate, training epochs, batch size and checkpoint selection rule were used for the selected architectures. CAN and U-Net have different depths, spatial activation footprints and numbers of parameters; this is an **architecture comparison**, not a parameter-matched ablation.
 
-The evaluation script saves numerical results as CSV and JSON files.
-
-Failure-case analysis can be performed using:
-
-`python failure_cases.py --split test --device cuda --label 5 --top-k 5 --batch-size 8`
-
-Full GPU evaluations should be executed through the Rangpur Slurm scheduler.
-
-### 8.6 Reproducibility Notes
-
-Model selection is performed using validation performance rather than test-set performance.
-
-The same predefined data partitions are retained for both architectures.
-
-Model checkpoints, full training data and generated outputs are stored separately from the source-code repository.
-
-Reported numerical performance is based on actual model training and evaluation logs rather than synthetic or illustrative values.
-
-A single experimental run does not quantify variance across random seeds. More extensive repeat experiments would be necessary to determine the statistical robustness of observed performance differences.
+One training run per model and one primary test benchmarking pass do not establish variance across random seeds or latency measurement uncertainty. The 540 test slices originate from just **three patients**, so per-slice evaluation metrics should not be mistaken for evidence of generalisation to a large independent clinical population. Generated checkpoints, clinical data and patient-level images are not committed to the public repository.
 
 ## 9. Engineering Recommendation
 
-### 9.1 Overall Recommendation
+### 9.1 Decision Based on Completed Quantitative Evidence
 
-Based on the completed validation and independent test-set experiments, **Standard U-Net is the recommended architecture for further development under the current experimental conditions**.
+For the present **2D HipMRI annotation prototype**, **Basic U-Net is the preferred accuracy-and-memory baseline**. It achieved higher held-out prostate Dice (**0.8637** vs. **0.8557**) and foreground macro Dice (**0.9182** vs. **0.9162**), with lower measured peak allocated GPU memory (**149.47 MB** vs. **200.15 MB**). CAN met the required Normal Difficulty threshold with **prostate Dice 0.8557** and used substantially fewer trainable parameters (**260,038** vs. **1,942,374**). Its measured inference latency was marginally lower in the single available benchmark, but that difference requires replication before being treated as operationally meaningful.
 
-On the same held-out test partition, Standard U-Net achieved:
+Accordingly, CAN is a credible compact *parameter-count* alternative, but the completed evidence does **not** justify preferring it solely for higher prostate segmentation accuracy or lower GPU memory. Retain both models for qualitative failure analysis; do not deploy either without independent clinical validation.
 
-- Higher mean foreground Dice: **0.9182 versus 0.9141**.
-- Higher raw Label 5 Dice: **0.8637 versus 0.8511**.
-- Fewer parameters: **1,942,374 versus 2,030,902**.
-- Lower peak allocated GPU memory: **149.47 MB versus 165.82 MB**.
+### 9.2 Boundary Reliability and Usability
 
-The residual architecture achieved lower training loss but did not provide a global test Dice advantage.
+High dataset-aggregated Dice does not exclude local misses, small-structure under-segmentation or potentially important false-positive contours. The proposed human-in-the-loop interface should therefore keep predictions editable and require specialist inspection, especially when the predicted prostate is absent or unusually small or when adjacent structures are poorly separated.
 
-Although Improved U-Net recorded shorter inference latency in the initial measurement, this result requires repeated, warmed-up benchmarking before a consistent speed advantage can be established.
-
-Therefore, Standard U-Net currently provides the more favourable combination of segmentation accuracy and model footprint.
-
-### 9.2 Error Reliability and Operational Risk
-
-The five failure cases demonstrate that both models can completely miss very small annotated regions.
-
-The residual architecture improved Case 335 substantially but also failed dramatically in Case 250, where Standard U-Net performed well.
-
-These contrasting cases illustrate why average segmentation metrics alone cannot establish boundary reliability.
-
-In radiotherapy planning, missed or incorrectly included anatomical regions may have important clinical consequences.
-
-Consequently, automated segmentation predictions should be treated as proposals that require specialist verification.
-
-Particular caution is necessary around small targets, missing regions and uncertain boundaries.
-
-Additional safeguards such as uncertainty estimation, cross-slice consistency analysis and targeted manual review may improve the safety of future systems.
-
-However, these safeguards were not implemented or validated in this experiment.
+The completed CAN-specific per-slice analysis identified a strong CAN advantage on Cases **74** (0.5644 vs. Basic 0.0000) and **483** (0.5605 vs. 0.0000), but a complete CAN overlap failure on Cases **513** and **187**, where the baseline reached 0.4299 and 0.5417 respectively. Case **316** remained difficult for both models. This contrast supports mandatory manual review of individual contours and shows why whole-dataset Dice does not measure reliability on every slice. The CSV additionally confirms two distinct CAN failure patterns: **Case 513** has 41 misplaced prostate-positive pixels with no true overlap, whereas **Case 187** has no prostate-positive prediction at all. In contrast, CAN recovered 46 and 44 true prostate pixels in Cases **74** and **483**, respectively. The inspected overlays verify the observed overlap and omission patterns, but precise prostate base/apex localisation and clinical boundary safety have not been established.
 
 ### 9.3 Limitations and Future Work
 
-The present study has several limitations.
+The study has several limitations: one training run per architecture, only three independent test patients, 2D-only images without adjacent-slice continuity, no uncertainty quantification, and single-pass GPU inference timing rather than repeated warmed-up benchmarks. The comparison also does not isolate dilation as the sole causal factor because the networks differ in multiple architectural respects, such as pooling, skip paths, channel layout and capacity.
 
-The held-out test partition contains only three patients, which restricts the generalisability of the results.
+Practical next steps include quantifying FP/FN patterns and boundary distances across all target-containing slices rather than only five selected examples; testing Dice-based or class-balanced losses; repeating training across seeds; reporting boundary-sensitive measures such as surface distance where appropriate; and exploring cross-slice or 3D context if resources permit. These are **future proposals**, not experiments performed for this submission.
 
-Each architecture was trained in a single 10-epoch experiment. Multiple random seeds would be required to assess training variability more reliably.
+### 9.4 Recommendation to the Project Manager
 
-The models operate on independent 2D slices and do not explicitly model continuity across adjacent MRI slices.
-
-The numerical-to-anatomical class mapping, including whether raw Label 5 represents the prostate, remains unverified.
-
-The inference time measurements were obtained from a single evaluation procedure rather than a repeated latency benchmark.
-
-Future work should focus on verifying anatomical labels, evaluating additional patients, experimenting with class-balanced or Dice-based loss functions, and investigating 3D or multi-slice architectures.
-
-Repeated benchmarking of GPU memory and inference latency would also strengthen the computational comparison.
-
-### 9.4 Final Recommendation to the Project Manager
-
-The experimental evidence does not justify selecting the residual architecture solely because it is more complex.
-
-Standard U-Net achieved slightly better global segmentation accuracy while requiring fewer parameters and less peak allocated GPU memory.
-
-Improved U-Net demonstrated a meaningful advantage on one difficult slice, but this was accompanied by severe deterioration on another.
-
-For the next stage of prototype development, Standard U-Net is recommended as the primary benchmark.
-
-Further research should focus on reducing small-structure detection failures and improving boundary reliability rather than increasing architectural complexity without targeted evidence of benefit.
-
-Neither model should be deployed as an autonomous clinical segmentation system without verified anatomical labels, more extensive patient-level testing and expert validation.
+Continue using **Basic U-Net as the working contour-proposal baseline** under the current compute and evaluation assumptions, while retaining CAN as an informative context-aggregation comparator that meets the assignment target with far fewer learned parameters. Prioritise targeted failure-case review over further architectural complexity, and do not interpret aggregate Dice as proof of clinical safety. The selected, visually inspected CAN failure cases already show both large local benefits and severe regressions; this recommendation should be revisited only after broader patient-level and boundary-specific evaluation.
 
 ## 10. Artificial Intelligence Usage Disclosure
 
-ChatGPT was used to assist with understanding PyTorch concepts, developing and debugging data-loading and model-training code, preparing evaluation and visualisation scripts, interpreting diagnostic outputs and structuring project documentation.
+ChatGPT was used to assist with understanding COMP3710 CNN/segmentation concepts, drafting and debugging PyTorch architecture and training scripts, modifying the evaluation and failure-case analysis utilities, interpreting logged results and structuring the README. Following tutor feedback, the initial residual-U-Net comparison was replaced by the course-appropriate **Basic 2D U-Net vs. 2D CAN** comparison. AI assistance included an implementation of a compact CAN based on stacked dilated convolutions; it is not represented here as an exact paper reproduction.
 
-AI assistance included suggestions for implementing residual blocks, structuring reproducible experiments, and identifying potential problems involving medical image preprocessing, data leakage and model evaluation.
+The author checked functional behaviour through dataset audits, patient-split verification, forward/backward/optimizer smoke tests and actual Rangpur A100 training and held-out test runs. The reported scores, checkpoint epochs, parameter counts and resource measurements were taken from these actual experiment logs, not synthetic examples. The **CAN-specific** failure-case analysis completed on all 540 test slices, and the five selected numerical case results in Section 7 are transcribed from its genuine output log. The selected-case CSV was subsequently checked to verify each model’s false-positive and false-negative pixel counts, and the five patient-level PNG overlays were visually examined for consistency with the numerical findings. This inspection was not a specialist clinical review.
 
-The suggested code was checked through dataset audits, patient-split verification, tensor shape tests, forward and backward propagation smoke tests, checkpoint inspection and actual training experiments on Rangpur.
-
-Both models completed 10-epoch training runs, and the training logs confirmed that best-validation checkpoints were saved.
-
-Independent test-set evaluation and five visual failure-case analyses were completed using actual HipMRI data.
-
-The author remains responsible for validating the implementation, experimental claims and conclusions. Unverified anatomical mappings and experimental limitations are explicitly identified.
+Responsibility for validating the methodology, model source, numerical results, figure provenance, intellectual contribution and compliance with UQ academic integrity and HipMRI data use rules remains with the submitting student.
 
 ## 11. Data Acknowledgment and Usage Restrictions
 
@@ -798,7 +544,7 @@ The original MRI scans, segmentation masks and trained model checkpoints are not
 
 Public redistribution of patient-level MRI visualisations or derived overlays will only be considered after confirming the applicable permissions.
 
-The dataset providers do not guarantee the correctness of the provided data. Therefore, preprocessing assumptions, annotation quality and anatomical label mappings must be independently checked where possible.
+The dataset providers do not guarantee the correctness of the provided data. Therefore, preprocessing assumptions and annotation quality should be independently checked where possible. The dataset's official anatomical class mapping was checked separately against `BriefDataDescription.txt`.
 
 ### 11.3 Dataset Citation
 
@@ -811,11 +557,8 @@ This publication is included among the references specified in the HipMRI Study 
 ## 12. References
 
 1. The University of Queensland. *COMP3710/COMP7710 Pattern Recognition: Report Assessment Specification*. 2026.
-
-2. HipMRI Study. *HipMRI Study for MRI-alone Treatment Planning and Other Imaging*. https://doi.org/10.1016/j.ijrobp.2015.08.045
-
-3. Ronneberger, O., Fischer, P., and Brox, T. (2015). *U-Net: Convolutional Networks for Biomedical Image Segmentation*. arXiv:1505.04597. https://arxiv.org/abs/1505.04597
-
-4. He, K., Zhang, X., Ren, S., and Sun, J. (2016). *Deep Residual Learning for Image Recognition*. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. https://arxiv.org/abs/1512.03385
-
+2. Dowling, J. A., et al. (2015). *Automatic Substitute Computed Tomography Generation and Contouring for Magnetic Resonance Imaging (MRI)-Alone External Beam Radiation Therapy From Standard MRI Sequences*. *International Journal of Radiation Oncology, Biology, Physics*, 93(5), 1144–1153. https://doi.org/10.1016/j.ijrobp.2015.08.045
+3. Ronneberger, O., Fischer, P., and Brox, T. (2015). *U-Net: Convolutional Networks for Biomedical Image Segmentation*. In *MICCAI*. https://arxiv.org/abs/1505.04597
+4. Yu, F., and Koltun, V. (2016). *Multi-Scale Context Aggregation by Dilated Convolutions*. In *ICLR*. https://arxiv.org/abs/1511.07122
 5. HipMRI Study. *Data Use Agreement*. Distributed with the HipMRI Study dataset on the UQ Rangpur HPC cluster.
+6. HipMRI Study / CSIRO. *BriefDataDescription.txt*, official supporting anatomical label documentation, available with the HipMRI Study collection: https://data.csiro.au/collection/csiro:51392

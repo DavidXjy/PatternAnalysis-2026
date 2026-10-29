@@ -1,9 +1,8 @@
 
-"""Train/evaluate a standard 2D U-Net on the HipMRI 6-class slice masks.
+"""Train/evaluate Basic U-Net or CAN on the same HipMRI six-class slices.
 
-IMPORTANT: The class index corresponding to the prostate is not yet verified.
-Per-class metrics here are for raw label IDs, NOT confirmed prostate Dice.
-Do not use the test split for tuning; --evaluate-test only after model selection.
+Raw label 5 is prostate per the official HipMRI label description.
+Choose checkpoints using validation data; do not tune on the test split.
 """
 
 import argparse
@@ -17,7 +16,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset import HipMRIDataset, check_patient_splits
-from modules import UNet2D
+from modules import UNet2D, CAN2D
 
 
 NUM_CLASSES = 6
@@ -29,7 +28,7 @@ NUM_CLASSES = 6
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="HipMRI 2D U-Net training"
+        description="HipMRI 2D Basic U-Net / CAN training"
     )
 
     parser.add_argument(
@@ -44,6 +43,10 @@ def parse_args():
         help="Evaluate a saved checkpoint on the held-out test set"
     )
 
+    parser.add_argument(
+        "--model", choices=("unet", "can"), default="unet",
+        help="Model architecture: baseline Basic U-Net or dilated CAN"
+    )
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -57,15 +60,25 @@ def parse_args():
 
     parser.add_argument(
         "--checkpoint",
-        default="checkpoints/baseline_unet.pt"
+        default=None  # Architecture-specific default assigned in main()
     )
 
     parser.add_argument(
         "--output-dir",
-        default="outputs"
+        default=None  # Architecture-specific default assigned in main()
     )
 
     return parser.parse_args()
+
+
+def build_model(model_name, base_channels):
+    """Construct either architecture with the identical class-label interface."""
+    model_class = UNet2D if model_name == "unet" else CAN2D
+    return model_class(
+        in_channels=1,
+        out_channels=NUM_CLASSES,
+        base_channels=base_channels,
+    )
 
 
 # ==========================================
@@ -199,7 +212,7 @@ def evaluate(model, loader, criterion, device):
 # 4. Smoke Test
 # ==========================================
 
-def smoke_test():
+def smoke_test(model_name="unet"):
     """
     Test one small optimization step on CPU.
 
@@ -238,12 +251,8 @@ def smoke_test():
         mode="nearest"
     )[:, 0].long()
 
-    # Create a small U-Net
-    model = UNet2D(
-        in_channels=1,
-        out_channels=NUM_CLASSES,
-        base_channels=8
-    )
+    # Create a small model (Basic U-Net or CAN) and run a real-data test.
+    model = build_model(model_name, base_channels=8)
 
     model.train()
 
@@ -294,14 +303,15 @@ def smoke_test():
 # 5. Save Training Results and Plots
 # ==========================================
 
-def save_history_and_plot(history, output_dir):
+def save_history_and_plot(history, output_dir, model_name="unet"):
 
     output_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    csv_path = output_dir / "baseline_history.csv"
+    prefix = "baseline" if model_name == "unet" else "can"
+    csv_path = output_dir / f"{prefix}_history.csv"
 
     with csv_path.open(
         "w",
@@ -381,7 +391,7 @@ def save_history_and_plot(history, output_dir):
     fig.tight_layout()
 
     fig.savefig(
-        output_dir / "baseline_training_curves.png",
+        output_dir / f"{prefix}_training_curves.png",
         dpi=150
     )
 
@@ -406,7 +416,7 @@ def main():
 
     # Run lightweight smoke test
     if args.smoke_test:
-        smoke_test()
+        smoke_test(args.model)
         return
 
     # Check CUDA availability for full training
@@ -423,7 +433,16 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
 
-    checkpoint_path = Path(args.checkpoint)
+    # Never overwrite the pre-existing baseline with a CAN checkpoint.
+    checkpoint_path = Path(args.checkpoint or (
+        "checkpoints/baseline_unet.pt" if args.model == "unet"
+        else "checkpoints/can_best.pt"
+    ))
+    output_dir = Path(args.output_dir or (
+        "outputs" if args.model == "unet" else "outputs/can"
+    ))
+    if args.model == "can" and checkpoint_path.name == "baseline_unet.pt":
+        raise ValueError("Refusing to save CAN into baseline_unet.pt")
 
     # ======================================
     # 7. Evaluate Test Set
@@ -440,11 +459,12 @@ def main():
             weights_only=True
         )
 
-        model = UNet2D(
-            in_channels=1,
-            out_channels=NUM_CLASSES,
-            base_channels=saved["base_channels"]
-        ).to(device)
+        checkpoint_model = saved.get("model_type", "unet")
+        if checkpoint_model != args.model:
+            raise ValueError(
+                f"Checkpoint is for {checkpoint_model}, but --model is {args.model}"
+            )
+        model = build_model(args.model, saved["base_channels"]).to(device)
 
         model.load_state_dict(
             saved["model_state_dict"]
@@ -469,8 +489,7 @@ def main():
         )
 
         print(
-            "TEST Dice by RAW LABEL "
-            "(not confirmed anatomy):",
+            "TEST Dice by RAW LABEL (label 5 = prostate):",
             dice
         )
 
@@ -524,14 +543,12 @@ def main():
     )
 
     # ======================================
-    # 9. Create U-Net and Optimizer
+    # 9. Create Model and Optimizer
     # ======================================
 
-    model = UNet2D(
-        in_channels=1,
-        out_channels=NUM_CLASSES,
-        base_channels=args.base_channels
-    ).to(device)
+    model = build_model(args.model, args.base_channels).to(device)
+    print(f"Training architecture: {args.model}")
+    print(f"Checkpoint path: {checkpoint_path}")
 
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -605,7 +622,8 @@ def main():
                     "model_state_dict": model.state_dict(),
                     "base_channels": args.base_channels,
                     "epoch": epoch,
-                    "val_macro_dice": best_dice
+                    "val_macro_dice": best_dice,
+                    "model_type": args.model
                 },
                 checkpoint_path
             )
@@ -621,12 +639,12 @@ def main():
 
     save_history_and_plot(
         history,
-        Path(args.output_dir)
+        output_dir,
+        model_name=args.model
     )
 
     print(
-        "Training complete. "
-        "Prostate label mapping still requires verification."
+        "Training complete. Raw label 5 is the verified prostate label."
     )
 
 
